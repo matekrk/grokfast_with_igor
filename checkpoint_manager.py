@@ -23,7 +23,7 @@ class CheckpointManager:
                  save_dir = "results",
                  checkpoint_dir = "checkpoints",
                  stats_dir = "stats",
-                 save_freq=1000,
+                 save_freq=200,
                  max_to_keep=5):
         """
         Initialize the checkpoint manager.

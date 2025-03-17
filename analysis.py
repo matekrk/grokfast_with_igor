@@ -2,18 +2,10 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
 import torch
 import torch.nn as nn
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from collections import defaultdict
 
-from IPython.core.pylabtools import figsize
-from jupyter_server.services.contents import checkpoints
 from torch import optim
-from torchmetrics.classification import MulticlassAccuracy
 from tqdm import tqdm
 
 from analysis_transformer import Decoder
@@ -44,8 +36,7 @@ def get_sampler_iter_state(dataloader):
     # For SequentialSampler, we don't need state
     return None
 
-# Training loop with analysis
-# todo get train/eval dataloader states dicts
+
 def train_with_analysis_epochs(model: object, train_loader: object, eval_loader: object,
                                dataset_split_indices,
                                criterion: object, optimizer: object, scheduler: object,
@@ -105,8 +96,6 @@ def train_with_analysis_epochs(model: object, train_loader: object, eval_loader:
     }
     min_epochs_for_detection = 100
     grokking_analysis = None
-    # info the logging / analyzing / saving integrals must be
-    track_metrics_interval = 1
 
     for epoch in tqdm(range(epochs)):
         train_dataloader_state['epoch'] = epoch
@@ -114,6 +103,9 @@ def train_with_analysis_epochs(model: object, train_loader: object, eval_loader:
         train_total = 0
         train_loss = 0.0
         model.train()
+        # warning the examples are organized with EXAMPLES AS ROWS where each row is a sequence,
+        #  with row[:-1] is the input, while [-1] is the target
+        #  therefore in the forward model it needs to be transposed!
         for inputs, targets in train_loader:
             inputs, targets = inputs.to(device), targets.to(device)
             optimizer.zero_grad()
@@ -129,41 +121,21 @@ def train_with_analysis_epochs(model: object, train_loader: object, eval_loader:
 
         train_accuracy = train_correct / train_total if train_total > 0 else 0.0
         train_loss = train_loss / train_total if train_total > 0 else 0.0
-        train_stats = {'accuracy': train_accuracy, 'loss': train_loss, 'epoch': epoch}
-        model.log_stats('training', train_stats)
 
         if epoch % log_interval == 0:
-            # info evaluate each epoch
+            # info log train and eval statistics at the same epochs,
+            #  to have the same number of logs; it might fail otherwise todo repair analyze_grokking_transitions()
+            train_stats = {'accuracy': train_accuracy, 'loss': train_loss, 'epoch': epoch}
+            model.log_stats('training', train_stats)
             model.eval()
             eval_dataloader_state['epoch'] = epoch
             eval_accuracy, eval_loss = model.evaluate(eval_loader)
             eval_stats = {'accuracy': eval_accuracy, 'loss': eval_loss, 'epoch': epoch}
             model.log_stats('evaluation', eval_stats)
             model.train()
-            # At the end of each epoch, try to identify grokking phases warning every epoch?
+            # info now try to identify grokking phases
             track_metrics_for_grokking(epoch=epoch, model=model, train_loader=train_loader, eval_loader=eval_loader,)
-        """
-        # Detailed analysis at less frequent intervals
-        # if epoch % analyze_interval == 0:
-        #     Store a sample input for visualization
-            # sample_input = next(iter(eval_loader))[0].to(device)
-
-            # Calculate head attribution if we're past the early training stage
-            # if epoch > 0 and epoch % (analyze_interval * 5) == 0:
-                # Visualize attention patterns
-                # model.visualize_attention(sample_input, title=f"Attention Patterns at epoch {epoch}")
-                # print("Analyzing head attribution...")
-                # attribution = model.analyze_head_attribution(eval_loader)
-                # plot_attributions(attribution=attribution, epoch=epoch, title=f"Head Attribution at Step {epoch}")
-                # cross_attribution = model.analyze_head_cross_attribution(eval_loader)
-                # plot_cross_attributions(attribution=cross_attribution, epoch=epoch,
-                #                         title=f"Cross-Attention Attribution score (accuracy decrease when both heads masked) at epoch {epoch}")
-
-                # Also calculate attention entropy
-                # entropies = model.compute_attention_entropy(eval_loader)
-                # plot_entropy(entropies=entropies, epoch=epoch, title=f"Attention Entropy at Step {epoch}")
-        """
-        if epoch > min_epochs_for_detection and epoch % (25 * log_interval) == 0:
+        if epoch > min_epochs_for_detection and epoch % (50 * log_interval) == 0:
             # info analyze_grokking_transistions() should BEFORE visualize_model_transitions()
             grokking_analysis = analyze_grokking_transitions(model=model, train_loader=train_loader,
                                                              eval_loader=eval_loader)
@@ -172,20 +144,18 @@ def train_with_analysis_epochs(model: object, train_loader: object, eval_loader:
                                      include_metrics=['attention', 'attribution', 'cross_attribution', 'entropy',
                                                       'weight_norms', 'accuracy', 'loss'],   # 'grokking_phases'],
                                      save_path=f"{model.save_dir}/comprehensive_visualization_{epoch}.png",
-                                     logx=True
+                                     logx=False
                                      )
 
         if (epoch + 1) % 10 == 0:
             comm = f"\t val_acc: {model.logger.get_last_value('evaluation', 'accuracy'):.5f}\t trn_acc: {model.logger.get_last_value('training', 'accuracy'):.5f}"
-            # comm = f"\t val_acc: {model.train_history['accuracy'][-1]:.5f}\t trn_acc: {train_accuracy:.5f} "
-            # if phases and 'grokking_step' in phases:
-            #     comm = comm + f"\t |\t Grokking at epoch {phases['grokking_step']}"
             if (grokking_analysis is not None and 'primary_grokking_step' in grokking_analysis and
                     grokking_analysis["primary_grokking_step"] is not None):
                 primary_grokking_step = grokking_analysis['primary_grokking_step']
                 comm = f"{comm}\t Primary grokking detected at epoch {primary_grokking_step}"
             tqdm.write(comm)
 
+        # todo generować rysunki poszczególnych statystyk przy zapamietywaniu checkpointów
         checkpointManager.save_checkpoint(epoch=epoch + 1,
                                           train_dataloader_state=train_dataloader_state,
                                           eval_dataloader_state=eval_dataloader_state,
@@ -200,31 +170,22 @@ def train_with_analysis_epochs(model: object, train_loader: object, eval_loader:
 
     # Final detailed analysis
     print("\nFinal Analysis:")
-    model.plot_training_dynamics()
-    phases = model.identify_grokking_phase()
-
-    # Compare attention patterns before and after grokking
-    if phases:
-        # Get sample input for visualization
-        sample_input = next(iter(eval_loader))[0].to(device)
-
-        if np.any(phases['pre_grokking_mask']):
-            # Find a representative pre-grokking step
-            pre_step = phases['pre_grokking_steps'][-1]
-            print(f"Analyzing pre-grokking attention (step {pre_step})...")
-
-            # We can't go back in time, so this is just illustrative
-            model.visualize_attention(sample_input, title=f"Pre-Grokking Attention (Step {pre_step})")
-
-        print(f"Analyzing post-grokking attention (latest step)...")
-        model.visualize_attention(sample_input, title="Post-Grokking Attention (Latest)")
+    visualize_model_analysis(model=model, epoch=epoch,
+                             eval_loader=eval_loader,
+                             include_metrics=['attention', 'attribution', 'cross_attribution', 'entropy',
+                                              'weight_norms', 'accuracy', 'loss'],  # 'grokking_phases'],
+                             save_path=f"{model.save_dir}/comprehensive_visualization_final.png",
+                             logx=True
+                             )
 
     return model
 
-def create_model(embedding, num_layers, heads_per_layer, num_tokens, seq_len,
+def create_model(embedding, num_layers, heads_per_layer, batch_size,
+                 operation, num_tokens, seq_len,
                  criterion, device, base_dir="results", init_xavier=False):
     ff = datetime.now().strftime("%f")
-    id = f"l{num_layers}_h{heads_per_layer}_e{embedding}_{ff}"
+    xavier = '_xavier' if init_xavier else ''
+    id = f"l{num_layers}_h{heads_per_layer}_e{embedding}_b{batch_size}_{operation[:4]}{xavier}_{ff}"
 
     # info save_dir
     save_dir = Path(base_dir) / f"{id}"
@@ -257,19 +218,44 @@ def create_model(embedding, num_layers, heads_per_layer, num_tokens, seq_len,
     return model, save_dir, checkpoint_dir, stats_dir
 
 
+class LabelSmoothingLoss(nn.Module):
+    def __init__(self, classes, smoothing=0.1):
+        super(LabelSmoothingLoss, self).__init__()
+        self.confidence = 1.0 - smoothing
+        self.smoothing = smoothing
+        self.classes = classes
+
+    def forward(self, pred, target):
+        pred = pred.log_softmax(dim=-1)
+        with torch.no_grad():
+            true_dist = torch.zeros_like(pred)
+            true_dist.fill_(self.smoothing / (self.classes - 1))
+            true_dist.scatter_(1, target.unsqueeze(1), self.confidence)
+        return torch.mean(torch.sum(-true_dist * pred, dim=-1))
+
+    def __repr__(self):
+        return "LabelSmoothingLoss(classes={}, smoothing={})".format(self.classes, self.smoothing)
+
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # todo use label smoothing to fight overconfidence, eg. LabelSmoothing loss above
+    criterion = nn.CrossEntropyLoss()
+    # criterion = LabelSmoothingLoss(args.classes, args.smoothing)
 
     torch.manual_seed(args.seed)
     model, save_dir, checkpoint_dir, stats_dir = create_model(
         embedding=args.embedding,
         num_layers=args.num_layers,
         heads_per_layer=args.num_heads,
+        batch_size=args.batch_size,
+        operation=args.operation,
         num_tokens=args.p + 2,
         seq_len=5,
-        criterion=nn.CrossEntropyLoss(),
+        criterion=criterion,
         device=device,
-        base_dir="results"
+        base_dir="results",
+        init_xavier=True,
     )
 
     modulus = args.p
@@ -309,7 +295,7 @@ def main(args):
     model = train_with_analysis_epochs(model=model,
                                        train_loader=train_loader, eval_loader=test_loader,
                                        dataset_split_indices=dataset_split_indices,
-                                       criterion=nn.CrossEntropyLoss(),
+                                       criterion=criterion,
                                        optimizer=optimizer, scheduler=scheduler,
                                        epochs=args.epochs,
                                        device=device,
@@ -349,7 +335,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=30000)
     parser.add_argument("--analyze_interval", type=int, default=100)
     parser.add_argument("--log_interval", type=int, default=10)
-    parser.add_argument("--checkpoint_interval", type=int, default=100)
+    parser.add_argument("--checkpoint_interval", type=int, default=200)
 
     parser.add_argument("--operation", type=str, default='multiply')
 

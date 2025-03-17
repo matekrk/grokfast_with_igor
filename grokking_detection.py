@@ -15,7 +15,6 @@ def normalize(signal):
 
 
 def smooth_signal(signal, window_length=11, polyorder=3):
-    """Apply Savitzky-Golay filter to smooth signal"""
     if len(signal) < window_length:
         # Not enough data points, use simpler smoothing
         return np.convolve(signal, np.ones(min(len(signal), 3)) / min(len(signal), 3), mode='same')
@@ -496,6 +495,7 @@ def visualize_grokking_detection_seaborn(detection_result, model=None, save_path
     else:
         plt.suptitle("Multi-Metric Grokking Detection", fontsize=16, y=0.98)
 
+    # plt.tight_layout()
     # Save or show
     if save_path:
         plt.savefig(save_path, bbox_inches='tight', dpi=300)
@@ -591,7 +591,7 @@ def is_real_grokking_peak(metrics_df, evl_df, peak_idx, window_size=10):
 
     # Check for significant accuracy improvement
     acc_improvement = post_acc - pre_acc
-    if acc_improvement < 0.05:  # Require at least 5% improvement
+    if acc_improvement < pre_acc * 0.05:  # Require at least 5% improvement
         return False
 
     # Look for decreasing gap between train and val accuracy
@@ -625,7 +625,7 @@ def analyze_grokking_transitions(model, train_loader, eval_loader):
 
     # Exit if no detection results
     if detection_result is None or 'primary_grokking_step' not in detection_result:
-        print("No clear grokking transition detected")
+        print("\tNo clear grokking transition detected")
         return None
 
     # 2. Visualize detection
@@ -742,7 +742,7 @@ def analyze_grokking_transitions(model, train_loader, eval_loader):
         else:
             print(f"Warning: Grokking step {grokking_step} not found in metrics dataframe")
     else:
-        print("No clear grokking transition detected for phase analysis")
+        print("\tNo clear grokking transition detected for phase analysis")
         # Create empty phase information
         phases = {
             'pre_grokking_steps': [],
@@ -754,38 +754,3 @@ def analyze_grokking_transitions(model, train_loader, eval_loader):
             model.log_stats('grokking_phases', phases)
 
     return detection_result
-
-
-# Usage example in training loop:
-"""
-# In your analysis.py train_with_analysis_epochs function:
-
-# Initialize histories through model logger
-# Ensure these categories are created in your logger
-model.log_stats('weight_norms', {'epoch': 0})  # Initial empty entry
-model.log_stats('head_attribution', {'epoch': 0})
-model.log_stats('attention_entropy', {'epoch': 0})
-
-for epoch in tqdm(range(epochs)):
-    # Regular training as before...
-
-    # Periodically track metrics for grokking detection
-    if epoch % analyze_interval == 0:
-        track_metrics_for_grokking(model, train_loader, eval_loader)
-
-    # Periodically check for grokking
-    if epoch > min_epochs_for_detection and epoch % (analyze_interval * 5) == 0:
-        grokking_analysis = analyze_grokking_transitions(model, train_loader, eval_loader)
-
-        if grokking_analysis and 'primary_grokking_step' in grokking_analysis:
-            primary_step = grokking_analysis['primary_grokking_step']
-            tqdm.write(f"Potential grokking detected at step {primary_step}")
-
-            # Save additional checkpoints around grokking point
-            # if abs(epoch - primary_step) < analyze_interval * 2:
-            #     checkpointManager.save_checkpoint(
-            #         epoch=epoch,
-            #         force_save=True,
-            #         extra_data={'grokking_analysis': True}
-            #     )
-"""

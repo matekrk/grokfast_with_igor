@@ -1,5 +1,3 @@
-from datetime import datetime
-
 import torch
 import torch.nn as nn
 import numpy as np
@@ -299,44 +297,6 @@ class Decoder(nn.Module):
                 attribution_scores[f'layer_{layer_idx}_head_{head_idx}'] = baseline_accuracy - masked_accuracy
 
         return attribution_scores
-    """
-    def analyze_head_cross_attribution(self, eval_loader):
-        baseline_accuracy, baseline_loss = self.evaluate(eval_loader)
-        # info for each layer and head in layers _f_ and _s_, and appropriate heads in each
-        attr_scores = np.zeros((self.num_layers * self.num_layers * self.num_heads * self.num_heads, 5))
-        k = 0
-        for layer_f_idx, layer_f in enumerate(self.layers):
-            for head_f_idx in range(self.num_heads):
-                # mask for this head
-                head_f_dim = self.dim // self.num_heads
-                start_f_idx = head_f_idx * head_f_dim
-                end_f_idx = (head_f_idx + 1) * head_f_dim
-                original_f_weights = layer_f.attn.out_proj.weight.clone()
-                for layer_s_idx, layer_s in enumerate(self.layers):
-                    for head_s_idx in range(self.num_heads):
-                        # if layer_s_idx == layer_f_idx and head_s_idx == head_f_idx:
-                        #     continue
-                        original_s_weights = layer_s.attn.out_proj.weight.clone()
-                        # mask for this head
-                        head_s_dim = self.dim // self.num_heads
-                        start_s_idx = head_s_idx * head_s_dim
-                        end_s_idx = (head_s_idx + 1) * head_s_dim
-                        # zero out both heads
-                        with torch.no_grad():
-                            layer_f.attn.out_proj.weight[:, start_f_idx:end_f_idx] = 0
-                            layer_s.attn.out_proj.weight[:, start_s_idx:end_s_idx] = 0
-                        # info evaluate and recors
-                        masked_accuracy, masked_loss = self.evaluate(eval_loader)
-                        attr_scores[k] = (layer_f_idx, head_f_idx, layer_s_idx, head_s_idx, baseline_accuracy - masked_accuracy)
-                        with torch.no_grad():
-                            layer_f.attn.out_proj.weight.copy_(original_f_weights)
-                            layer_s.attn.out_proj.weight.copy_(original_s_weights)
-
-                        k += 1
-        attr_scores = attr_scores[:k]
-
-        return attr_scores
-    """
 
     def analyze_head_cross_attribution(self, eval_loader):
         """
@@ -503,7 +463,7 @@ class Decoder(nn.Module):
         patterns = self.get_attention_patterns()
 
         if not patterns:
-            print("No attention patterns were stored during forward pass.")
+            print("\tNo attention patterns were stored during forward pass.")
             return
 
         # Create a figure with a subplot for each layer and head

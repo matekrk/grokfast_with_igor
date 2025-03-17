@@ -83,6 +83,7 @@ class SequenceModularArithmeticDataset(Dataset):
 
     Format for Transformer models: [a, b, =, result]
     This version encodes the problem as a sequence prediction task.
+    warning data examples are given as rows [:-1] the input, [-1] the output need to be transposed withing forward
     """
 
     def __init__(self, modulus, op='add', num_samples=10000, max_int=None, seed=42):
@@ -227,40 +228,3 @@ def create_modular_dataloaders(modulus, op='add', batch_size=32,
     )
 
     return train_loader, test_loader, vocab_size, split_indices
-
-
-
-
-
-# Example usage:
-if __name__ == "__main__":
-    # Example 1: Simple modular addition with modulus 97
-    modulus = 97
-    train_loader, test_loader, vocab_size = create_modular_dataloaders(
-        modulus=modulus,
-        op='add',
-        num_samples=10000,
-        batch_size=32,
-        sequence_format=True
-    )
-
-    print(f"Vocabulary size: {vocab_size}")
-
-    # Inspect a batch
-    inputs, targets = next(iter(train_loader))
-    print(f"Input shape: {inputs.shape}")
-    print(f"Target shape: {targets.shape}")
-
-    # Check a few examples
-    for i in range(3):
-        input_seq = inputs[i].tolist()
-        target = targets[i].item()
-
-        a = input_seq[0]
-        b = input_seq[2]  # Skip the operation token
-        expected = (a + b) % modulus
-
-        print(f"Example {i + 1}: {a} + {b} = {target} (mod {modulus})")
-        print(f"Verification: {a} + {b} = {expected} (mod {modulus})")
-        print(f"Correct: {target == expected}")
-        print()

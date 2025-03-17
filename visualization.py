@@ -62,7 +62,7 @@ def create_attention_patterns_plot(fig, gs, row, col, model, eval_loader):
         pos = gs[row, col].get_position(fig)
 
         # Import necessary module
-        from matplotlib.gridspec import GridSpecFromSubplotSpec
+        # from matplotlib.gridspec import GridSpecFromSubplotSpec
 
         # Create a new GridSpecFromSubplotSpec
         inner_gs = GridSpecFromSubplotSpec(
@@ -79,10 +79,14 @@ def create_attention_patterns_plot(fig, gs, row, col, model, eval_loader):
                     inner_ax = fig.add_subplot(inner_gs[layer_idx, head_idx])
 
                     # Plot attention heatmap
-                    sns.heatmap(patterns[pattern_key], cmap='viridis',
+                    # Create mask for lower triangle only (including diagonal)
+                    mask = np.triu(np.ones_like(patterns[pattern_key], dtype=bool), k=1)
+                    sns.heatmap(patterns[pattern_key], cmap='viridis', mask=mask,
                                 cbar=False, xticklabels=False, yticklabels=False, ax=inner_ax)
 
                     inner_ax.set_title(f'layer {layer_idx} :: head {head_idx}', fontsize=8)
+                    inner_ax.set_xlabel('Key position', fontsize=8)
+                    inner_ax.set_ylabel('Query position', fontsize=8)
 
         # Add overall title for attention patterns
         plt.figtext(
@@ -221,6 +225,16 @@ def visualize_model_analysis(
         current_plot += 1
 
         # Plot training metrics if available
+        # warning the following approach toi putting 'train loss'/'eval loss' labels is probably better:
+        """
+        # Add y-axis label
+        ax.set_ylabel('Variable Values')  # A common label for both
+        # Add annotations for each line
+        ax.annotate('First Variable', xy=(-0.15, 0.25), xycoords='axes fraction', 
+            color='blue', rotation=90, va='center')
+        ax.annotate('Second Variable', xy=(-0.15, 0.75), xycoords='axes fraction', 
+            color='red', rotation=90, va='center')
+        """
         if 'training' in available_data:
             train_data = pd.DataFrame(available_data['training'])
             if 'accuracy' in train_data and 'accuracy' in include_metrics:
@@ -231,7 +245,9 @@ def visualize_model_analysis(
                 ax_loss = ax_metrics.twinx() if 'accuracy' in include_metrics else ax_metrics
                 sns.lineplot(data=train_data, x='epoch', y='loss', color='red',
                              label='Train Loss', ax=ax_loss)
-                ax_loss.set_ylabel('Loss', color='red')
+                ax_loss.set_ylabel('train loss', color='red')
+                ax_loss.yaxis.set_label_coords(1.1, 0.25)
+                ax_loss.tick_params(axis='y', labelcolor='red')
 
         # Plot evaluation metrics if available
         if 'evaluation' in available_data:
@@ -244,24 +260,22 @@ def visualize_model_analysis(
                 ax_loss = ax_metrics.twinx() if 'accuracy' in include_metrics else ax_metrics
                 sns.lineplot(data=eval_data, x='epoch', y='loss', color='orange',
                              label='Eval Loss', ax=ax_loss)
-                ax_loss.set_ylabel('Loss', color='orange')
+                ax_loss.set_ylabel('eval loss', color='orange')
+                ax_loss.yaxis.get_label().set_color('orange')
+                ax_loss.yaxis.set_label_coords(1.1, 0.75)
+                ax_loss.tick_params(axis='y', labelcolor='orange')
 
-        # Add grokking point if available
+        # Add all grokking points if available top the drawing
         if 'grokking_phases' in available_data and 'grokking_step' in available_data['grokking_phases']:
             grokking_step = available_data['grokking_phases']['grokking_step']
-            # Handle different possible types of grokking_step
             try:
-                # If it's a list with one element, extract that element
-                if isinstance(grokking_step, list) and len(grokking_step) == 1:
-                    grokking_step = grokking_step[0]
-                    # todo plot all in case of longer lists
-                # Check if it's a valid numeric value
-                if grokking_step is not None and not (isinstance(grokking_step, float) and np.isnan(grokking_step)):
-                    grokking_step_value = float(grokking_step)
-                    ax_metrics.axvline(x=grokking_step_value, color='purple', linestyle='--',
-                                      label=f'Grokking at {int(grokking_step_value)}')
+                if isinstance(grokking_step, list):
+                    for step in grokking_step:
+                        if step is not None and not (isinstance(step, float) and np.isnan(step)):
+                            step = float(step)
+                        ax_metrics.axvline(x=step, color='purple', linestyle='--')
             except (ValueError, TypeError):
-                    print(f"Warning: Invalid grokking_step value: {grokking_step}")
+                pass
 
 
         # Combine legends if we have both accuracy and loss
@@ -316,18 +330,15 @@ def visualize_model_analysis(
                          hue='Component', palette='rocket', ax=ax_norms,
                          linestyle='--')
 
-        # Add grokking point if available
+        # Add all grokking points if available top the drawing
         if 'grokking_phases' in available_data and 'grokking_step' in available_data['grokking_phases']:
             grokking_step = available_data['grokking_phases']['grokking_step']
             try:
-                # If it's a list with one element, extract that element
-                if isinstance(grokking_step, list) and len(grokking_step) == 1:
-                    grokking_step = grokking_step[0]
-
-                # Check if it's a valid numeric value
-                if grokking_step is not None and not (isinstance(grokking_step, float) and np.isnan(grokking_step)):
-                    grokking_step_value = float(grokking_step)
-                    ax_norms.axvline(x=grokking_step_value, color='purple', linestyle='--')
+                if isinstance(grokking_step, list):
+                    for step in grokking_step:
+                        if step is not None and not (isinstance(step, float) and np.isnan(step)):
+                            step = float(step)
+                        ax_norms.axvline(x=step, color='purple', linestyle='--')
             except (ValueError, TypeError):
                 pass
 
@@ -394,6 +405,8 @@ def visualize_model_analysis(
         ax_cross.set_title(f'Cross-Attribution Scores at Epoch {epoch}')
         ax_cross.tick_params(axis='x', rotation=45)
         ax_cross.tick_params(axis='y', rotation=0)
+        ax_cross.set_xlabel('')
+        ax_cross.set_ylabel('')
 
     # 5. Entropy Plot
     if 'entropy' in include_metrics and 'attention_entropy' in available_data:
@@ -427,69 +440,6 @@ def visualize_model_analysis(
         )
         if success:
             current_plot += 1
-    """
-    # 6. Attention Patterns
-    if 'attention' in include_metrics and eval_loader is not None:
-        ax_attn = fig.add_subplot(gs[current_plot // cols, current_plot % cols])
-        current_plot += 1
-
-        # Get sample input for visualization
-        sample_input = next(iter(eval_loader))[0]
-        if hasattr(model, 'device'):
-            sample_input = sample_input.to(model.device)
-
-        # Forward pass with attention storage
-        _ = model(sample_input, store_attention=True)
-
-        # Get attention patterns
-        patterns = model.get_attention_patterns()
-
-        if patterns:
-            # Create a composite visualization of attention patterns
-            n_layers = model.num_layers
-            n_heads = model.num_heads
-
-            # Create a grid of small heatmaps within this subplot
-            ax_attn.remove()
-
-            # Check if current subplot index is valid
-            if current_plot < rows * cols:
-                # Get the position of the current subplot
-                pos = gs[current_plot // cols, current_plot % cols].get_position(fig)
-
-                # Create a new GridSpecFromSubplotSpec
-                from matplotlib.gridspec import GridSpecFromSubplotSpec
-                inner_gs = GridSpecFromSubplotSpec(
-                    n_layers, n_heads,
-                    subplot_spec=gs[current_plot // cols, current_plot % cols]
-                )
-
-            for layer_idx in range(n_layers):
-                for head_idx in range(n_heads):
-                    pattern_key = f'layer_{layer_idx}_head_{head_idx}'
-
-                    if pattern_key in patterns:
-                        inner_ax = fig.add_subplot(inner_gs[layer_idx, head_idx])
-
-                        # Plot attention heatmap
-                        sns.heatmap(patterns[pattern_key], cmap='viridis',
-                                    cbar=False, xticklabels=False, yticklabels=False, ax=inner_ax)
-
-                        inner_ax.set_title(f'L{layer_idx}H{head_idx}', fontsize=8)
-
-            # Add overall title for attention patterns
-            # Get the position of the current subplot
-            pos = gs[current_plot // cols, current_plot % cols].get_position(fig)
-            plt.figtext(
-                pos.x0 + pos.width / 2,
-                pos.y1 + 0.02,
-                'Attention Patterns',
-                ha='center', fontsize=12
-            )
-        else:
-            ax_attn.text(0.5, 0.5, 'No attention patterns available',
-                         ha='center', va='center', fontsize=12)
-    """
     # 7. Grokking Analysis
     if 'grokking' in include_metrics and 'grokking_phases' in available_data:
         ax_grok = fig.add_subplot(gs[current_plot // cols, current_plot % cols])
@@ -535,7 +485,7 @@ def visualize_model_analysis(
                         ax_grok.axvline(x=grokking_step_value, color='r', linestyle='--',
                                        label=f'Grokking Point: {int(grokking_step_value)}')
                 except (ValueError, TypeError):
-                    print(f"Warning: Invalid grokking_step value in phases: {phases['grokking_step']}")
+                    print(f"Warning: Invalid grokking_step value in phases: {phases['grokking_step']} [line {530}]")
 
         ax_grok.set_title('Grokking Analysis')
         ax_grok.set_xlabel('Epoch')
@@ -551,7 +501,7 @@ def visualize_model_analysis(
     plt.suptitle(title, fontsize=14, y=0.98)
 
     # Adjust layout with reduced space for the title
-    plt.tight_layout(rect=[0, 0, 1, 0.97])  # Reduced from 0.97 to 0.95
+    # plt.tight_layout(rect=[0, 0, 1, 0.97])  # Reduced from 0.97 to 0.95
 
     # Save or show the figure
     if save_path:
@@ -600,4 +550,3 @@ def plot_entropy(entropies, epoch, title):
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
-

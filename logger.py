@@ -2,9 +2,7 @@ from collections import defaultdict
 
 class DataLogger:
     def __init__(self, id=None, **kwargs):
-        # Initialize an empty dictionary to store logs
         self.logs = defaultdict(lambda: defaultdict(list))
-        # id
         self.id = id
 
 
@@ -16,10 +14,6 @@ class DataLogger:
         :param key: The key within the category to store the value.
         :param value: The value to log.
         """
-        # if category not in self.logs:
-        #     self.logs[category] = {}
-        # if key not in self.logs[category]:
-        #     self.logs[category][key] = []
         self.logs[category][key].append(value)
 
     def update_category(self, category, data_dict):
@@ -29,16 +23,10 @@ class DataLogger:
         :param category: The category to update.
         :param data_dict: The dictionary containing data to add or update.
         """
-        # if category not in self.logs:
-        #     self.logs[category] = {}
-        # self.logs[category].update(data_dict)
         for key in data_dict:
             self.log_data(category, key, data_dict[key])
 
     def update_category_means(self, category, data_dict):
-        # info compute means of category dict and update  category dict
-        # for key in data_dict:
-        #     data_dict[key] = data_dict[key].mean()
         self.update_category_with_lists(category, data_dict)
 
     def value_in_category_key(self, category, key, value):
@@ -85,4 +73,3 @@ class DataLogger:
                 del self.logs[category]
         else:
             self.logs.clear()
-
