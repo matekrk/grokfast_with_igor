@@ -499,6 +499,7 @@ def visualize_grokking_detection_seaborn(detection_result, model=None, save_path
     # Save or show
     if save_path:
         plt.savefig(save_path, bbox_inches='tight', dpi=300)
+        plt.close()
 
     return fig
 
@@ -737,6 +738,7 @@ def analyze_grokking_transitions(model, train_loader, eval_loader):
 
             plt.tight_layout()
             plt.savefig(f'{model.save_dir}/head_attribution_by_phase_{model.plot_prefix}_{model.current_epoch}.png')
+            plt.close()
 
             detection_result['attribution_by_phase'] = attr_melted
         else:

@@ -246,7 +246,7 @@ def visualize_model_analysis(
                 sns.lineplot(data=train_data, x='epoch', y='loss', color='red',
                              label='Train Loss', ax=ax_loss)
                 ax_loss.set_ylabel('train loss', color='red')
-                ax_loss.yaxis.set_label_coords(1.1, 0.25)
+                ax_loss.yaxis.set_label_coords(1.025, 0.25)
                 ax_loss.tick_params(axis='y', labelcolor='red')
 
         # Plot evaluation metrics if available
@@ -262,7 +262,7 @@ def visualize_model_analysis(
                              label='Eval Loss', ax=ax_loss)
                 ax_loss.set_ylabel('eval loss', color='orange')
                 ax_loss.yaxis.get_label().set_color('orange')
-                ax_loss.yaxis.set_label_coords(1.1, 0.75)
+                ax_loss.yaxis.set_label_coords(1.025, 0.75)
                 ax_loss.tick_params(axis='y', labelcolor='orange')
 
         # Add all grokking points if available top the drawing
