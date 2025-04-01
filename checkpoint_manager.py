@@ -49,7 +49,7 @@ class CheckpointManager:
         # Create experiment directory
         self.experiment_dir = save_dir
         self.checkpoint_dir = checkpoint_dir
-        self.stats_dir = stats_dir
+        self.stats_dir = Path(stats_dir)
 
         # Create directories
         self.experiment_dir.mkdir(parents=True, exist_ok=True)
@@ -135,6 +135,7 @@ class CheckpointManager:
         checkpoint_name = f"checkpoint_step_{epoch}"
         model_path = self.checkpoint_dir / f"{checkpoint_name}.pt"
         state_path = self.checkpoint_dir / f"{checkpoint_name}_state.json"
+        split_indices_path = self.checkpoint_dir / f"{checkpoint_name}_split_indices.json"
 
         # Create the checkpoint dictionary
         checkpoint = {
@@ -178,7 +179,7 @@ class CheckpointManager:
             json.dump(state_info, f, indent=4)
 
         # Update checkpoint file list
-        self.checkpoint_files.append((model_path, state_path))
+        self.checkpoint_files.append((model_path, state_path, split_indices_path))
 
         # Manage maximum checkpoints to keep
         self._manage_checkpoint_retention()
@@ -193,12 +194,21 @@ class CheckpointManager:
 
         # Save dataset split indices if provided
         if dataset_split_indices is not None:
-            split_indices_path = self.checkpoint_dir / f"{checkpoint_name}_split_indices.pt"
-            torch.save(dataset_split_indices, split_indices_path)
+            split_indices_path = self.checkpoint_dir / f"{checkpoint_name}_split_indices.json"
+            with open(split_indices_path, "w") as f:
+                json.dump(dataset_split_indices, f, indent=4)
+            # torch.save(dataset_split_indices, split_indices_path)
+
             state_info["dataset_split_indices_file"] = str(split_indices_path)
+            # Save the state info as JSON
+            with open(state_path, "w") as f:
+                json.dump(state_info, f, indent=4)
 
+        # Save the state info as JSON
+        with open(state_path, "w") as f:
+            json.dump(state_info, f, indent=4)
 
-        print(f"\nCheckpoint saved at epoch {epoch}")
+        print(f"\tCheckpoint saved at epoch {epoch}")
 
     def update_stats(self, epoch, train_loss=None, train_accuracy=None,
                      val_loss=None, val_accuracy=None):
@@ -251,13 +261,12 @@ class CheckpointManager:
             # Remove the oldest checkpoints
             num_to_remove = len(self.checkpoint_files) - self.max_to_keep
             for i in range(num_to_remove):
-                model_path, state_path = self.checkpoint_files.pop(0)
+                model_path, state_path, split_indices_path = self.checkpoint_files.pop(0)
 
                 # Remove the files if they exist
-                if os.path.exists(model_path):
-                    os.remove(model_path)
-                if os.path.exists(state_path):
-                    os.remove(state_path)
+                model_path = Path(model_path); model_path.unlink(missing_ok=True)
+                state_path = Path(state_path); state_path.unlink(missing_ok=True)
+                split_indices_path = Path(split_indices_path); split_indices_path.unlink(missing_ok=True)
 
     def load_checkpoint(self, checkpoint_path=None, step=None):
         """
@@ -283,7 +292,7 @@ class CheckpointManager:
 
         # Ensure checkpoint exists
         if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+            raise FileNotFoundError(f"\nCheckpoint file not found: {checkpoint_path}")
 
         # Load the checkpoint
         print(f"Loading checkpoint from {checkpoint_path}")
@@ -424,6 +433,155 @@ class CheckpointManager:
             json.dump(serializable_pair, f, indent=4)
 
         return ind_file_path, pair_file_path
+
+
+class GrokAwareCheckpointManager(CheckpointManager):
+    """
+    Extends CheckpointManager to intelligently preserve checkpoints around grokking transitions.
+    """
+
+    def __init__(self, model, optimizer, scheduler=None, experiment_name=None,
+                 base_dir="results", save_dir="results", checkpoint_dir="checkpoints",
+                 stats_dir="stats", save_freq=200, max_to_keep=5,
+                 grokking_window=30, min_grokking_checkpoints=10):
+        """
+        Initialize with additional grokking-specific parameters.
+
+        Args:
+            model, optimizer, etc.: Same as CheckpointManager
+            grokking_window: How many checkpoints to keep before and after detected grokking point
+            min_grokking_checkpoints: Minimum number of checkpoints to maintain during analysis
+        """
+        super().__init__(model, optimizer, scheduler, experiment_name, base_dir,
+                         save_dir, checkpoint_dir, stats_dir, save_freq, max_to_keep)
+
+        self.grokking_window = grokking_window
+        self.min_grokking_checkpoints = min_grokking_checkpoints
+        self.grokking_points = []
+        self.protected_checkpoints = set()  # Checkpoints that won't be deleted
+
+    def update_grokking_points(self, new_point=None):
+        """
+        Update the list of detected grokking points.
+
+        Args:
+            new_point: A newly detected grokking point epoch
+        """
+        if new_point is not None and new_point not in self.grokking_points:
+            self.grokking_points.append(new_point)
+
+            # Calculate which checkpoints to protect around this point
+            window_start = max(0, new_point - self.grokking_window)
+            window_end = new_point + self.grokking_window
+
+            # Protect checkpoints within window
+            for epoch in range(window_start, window_end + 1):
+                if epoch % self.save_freq == 0:  # Only protect at save frequency
+                    self.protected_checkpoints.add(epoch)
+
+            # Always protect the exact grokking point
+            self.protected_checkpoints.add(new_point)
+
+            print(
+                f"\tDetected grokking at epoch {new_point}, protecting checkpoints in range [{window_start}, {window_end}]")
+
+    def _manage_checkpoint_retention(self):
+        """
+        Override the checkpoint retention strategy to preserve grokking-related checkpoints.
+        """
+        # If we haven't detected any grokking points yet, use standard strategy
+        if not self.grokking_points:
+            return super()._manage_checkpoint_retention()
+
+        # Count checkpoints
+        if len(self.checkpoint_files) <= self.min_grokking_checkpoints:
+            return  # Keep all if we're below minimum
+
+        # Identify which checkpoints can be removed
+        removable = []
+        for i, (model_path, state_path, split_indices_path) in enumerate(self.checkpoint_files):
+            # Extract epoch from filename
+            try:
+                epoch = int(model_path.stem.split('_')[-1])
+                if epoch not in self.protected_checkpoints:
+                    removable.append((i, model_path, state_path, split_indices_path))
+            except (ValueError, IndexError):
+                # If can't extract epoch, consider removable
+                removable.append((i, model_path, state_path, split_indices_path))
+
+        # Sort by index (oldest first)
+        removable.sort(key=lambda x: x[0])
+
+        # Calculate how many to remove
+        num_to_keep = max(self.min_grokking_checkpoints, len(self.checkpoint_files) - len(removable) + self.max_to_keep)
+        num_to_remove = max(0, len(self.checkpoint_files) - num_to_keep)
+
+        # Remove oldest non-protected checkpoints
+        for i in range(min(num_to_remove, len(removable))):
+            idx, model_path, state_path, split_indices_path = removable[i]
+
+            # Remove the files if they exist
+            model_path = Path(model_path); model_path.unlink(missing_ok=True)
+            state_path = Path(state_path); state_path.unlink(missing_ok=True)
+            split_indices_path = Path(split_indices_path); split_indices_path.unlink(missing_ok=True)
+
+            # Remove from our tracking list
+            self.checkpoint_files.pop(removable[i][0] - i)  # Adjust index as we remove items
+
+        print(
+            f"\tKept {len(self.checkpoint_files)} checkpoints, with {len(self.protected_checkpoints)} around grokking")
+
+    def save_checkpoint(self, epoch, train_dataloader_state=None, eval_dataloader_state=None,
+                        dataset_split_indices=None, train_loss=None, train_accuracy=None,
+                        val_loss=None, val_accuracy=None, extra_data=None, force_save=False):
+        """
+        Enhanced save_checkpoint that integrates with grokking detection.
+        """
+        # Check if this is near a detected grokking point
+        near_grokking = any(abs(epoch - point) <= self.grokking_window for point in self.grokking_points)
+
+        # Force save if near grokking point
+        if near_grokking:
+            force_save = True
+
+        # Check if a grokking transition might be occurring now
+        if val_accuracy is not None and train_accuracy is not None:
+            self._check_for_grokking(epoch, train_accuracy, val_accuracy)
+
+        # Call parent implementation with potentially modified force_save
+        super().save_checkpoint(
+            epoch, train_dataloader_state, eval_dataloader_state, dataset_split_indices,
+            train_loss, train_accuracy, val_loss, val_accuracy, extra_data, force_save
+        )
+
+    def _check_for_grokking(self, epoch, train_accuracy, val_accuracy):
+        """
+        Simple heuristic to detect potential grokking transitions.
+
+        This is a basic implementation - for more sophisticated detection,
+        integrate with your existing grokking_detection.py module.
+        """
+        # If we have enough history
+        if len(self.stats["train_accuracy"]) >= 5 and len(self.stats["val_accuracy"]) >= 5:
+            # Get recent history
+            recent_train = self.stats["train_accuracy"][-5:]
+            recent_val = self.stats["val_accuracy"][-5:]
+
+            # Check if train accuracy is high and stable
+            train_high = train_accuracy > 0.9
+            train_stable = max(recent_train) - min(recent_train) < 0.1
+
+            # Check if val accuracy is improving rapidly
+            val_improving = val_accuracy > 1.2 * sum(recent_val[:-1]) / len(recent_val[:-1])
+
+            # Potential grokking if train is high/stable and val is improving
+            if train_high and train_stable and val_improving:
+                print(
+                    f"\tPotential grokking detected at epoch {epoch} - val_acc: {val_accuracy:.4f}, trn_acc: {train_accuracy:.4f}, ")
+                self.update_grokking_points(epoch)
+
+                # Also force saves for surrounding checkpoints
+                # This could be expanded in a more sophisticated implementation
 
 
 # Example usage

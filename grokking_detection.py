@@ -15,7 +15,7 @@ def normalize(signal):
 
 
 def smooth_signal(signal, window_length=11, polyorder=3):
-    if len(signal) < window_length:
+    if len(signal) < window_length or polyorder >= window_length:
         # Not enough data points, use simpler smoothing
         return np.convolve(signal, np.ones(min(len(signal), 3)) / min(len(signal), 3), mode='same')
     return savgol_filter(signal, window_length, polyorder)
@@ -55,20 +55,20 @@ def detect_grokking_multi_metric(model, min_epoch=250, min_acc_threshold=0.2):
             trn_df = trn_df[trn_df['epoch'] >= min_epoch]
 
     if len(evl_df) < 10:  # Need enough data points after filtering
-        print(f"detect_grokking_multi_metric(): not enough data points after epoch {min_epoch} for reliable grokking detection")
+        print(f"\tdetect_grokking_multi_metric(): not enough data points for reliable grokking detection")
         return None
 
     # Also ensure validation accuracy has reached a minimum threshold
     if 'accuracy' in evl_df.columns:
         max_acc = evl_df['accuracy'].max()
         if max_acc < min_acc_threshold:
-            print(f"detect_grokking_multi_metric(): maximum validation accuracy ({max_acc:.3f}) is below threshold ({min_acc_threshold})")
+            print(f"\tdetect_grokking_multi_metric(): maximum validation accuracy ({max_acc:.3f}) is below threshold ({min_acc_threshold})")
             return None
 
     # Ensure we have enough data
     smoothing_window = min(11, len(evl_df) // 5) if len(evl_df) > 20 else 3
     if len(evl_df) < smoothing_window:
-        print("Not enough data points for reliable grokking detection")
+        print("\tNot enough data points for reliable grokking detection")
         return None
 
     # Create a metrics DataFrame
@@ -603,7 +603,7 @@ def is_real_grokking_peak(metrics_df, evl_df, peak_idx, window_size=10):
 
     return True
 
-def analyze_grokking_transitions(model, train_loader, eval_loader):
+def analyze_grokking_transitions(model, train_loader, eval_loader, save_path_prefix=""):
     """
     Comprehensive analysis of grokking transitions
 
@@ -633,7 +633,7 @@ def analyze_grokking_transitions(model, train_loader, eval_loader):
     fig = visualize_grokking_detection_seaborn(
         detection_result,
         model=model,
-        save_path=f"{model.save_dir}/grokking_detection_{model.current_epoch}.png"
+        save_path=f"{model.save_dir}/{save_path_prefix}grokking_detection_{model.current_epoch}.png"
     )
     # plt.show()
 

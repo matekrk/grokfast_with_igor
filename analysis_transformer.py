@@ -115,7 +115,8 @@ class Decoder(nn.Module):
     """Causal Transformer decoder with analysis capabilities
     """
 
-    def __init__(self, dim=128, num_layers=2, num_heads=4, num_tokens=97, seq_len=5,
+    def __init__(self, dim=128, num_layers=2, num_heads=4, num_tokens=97,
+                 seq_len=5, ratio=0.5,
                  criterion=nn.CrossEntropyLoss(), device='cpu', id=None,
                  save_dir=None, checkpoint_dir=None):
         super().__init__()
@@ -134,6 +135,7 @@ class Decoder(nn.Module):
         self.num_heads = num_heads
         self.num_tokens = num_tokens
         self.seq_len = seq_len
+        self.ratio = ratio
 
         self.device = device
 
@@ -141,7 +143,7 @@ class Decoder(nn.Module):
         self.criterion = criterion
 
         # History tracking for analysis
-        self.id = id if id else f"decoder_l{num_layers}_h{num_heads}_e{dim}_t{num_tokens}_s{seq_len}"
+        self.id = id if id else f"decoder_l{num_layers}_h{num_heads}_e{dim}_t{num_tokens}_s{seq_len}_r{ratio:.1f}"
         self.train_history = defaultdict(list)
         self.logger = DataLogger(id=self.id)
         self.current_step = 0

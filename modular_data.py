@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, Subset
 import numpy as np
 import random
 
@@ -163,7 +163,8 @@ class SequenceModularArithmeticDataset(Dataset):
 
 
 def create_modular_dataloaders(modulus, op='add', batch_size=32,
-                               train_ratio=0.8, sequence_format=True, seed=42):
+                               train_ratio=0.5, sequence_format=True, seed=42,
+                               dataset_split_indices=None):
     """
     Create train and test dataloaders for modular arithmetic tasks.
 
@@ -183,7 +184,7 @@ def create_modular_dataloaders(modulus, op='add', batch_size=32,
     # Set seed for reproducible splits
     torch.manual_seed(seed)
 
-    # Create dataset
+    # info Create all examples dataset from scratch
     if sequence_format:
         dataset = SequenceModularArithmeticDataset(
             modulus=modulus,
@@ -200,13 +201,20 @@ def create_modular_dataloaders(modulus, op='add', batch_size=32,
         vocab_size = modulus
 
     # Split into train and test sets
-    num_samples = len(dataset.data)
-    train_size = int(train_ratio * num_samples)
-    test_size = num_samples - train_size
+    # info split randomly using seed
+    if dataset_split_indices is None:
+        if train_ratio >= 1. or train_ratio < 0.:
+            raise ValueError(f"train_ratio must be >= 0 and < 1, but got {train_ratio}")
+        num_samples = len(dataset.data)
+        train_size = int(train_ratio * num_samples)
+        test_size = num_samples - train_size
 
-    train_dataset, test_dataset = random_split(
-        dataset, [train_size, test_size]
-    )
+        train_dataset, test_dataset = random_split(
+            dataset, [train_size, test_size]
+        )
+    else:
+        train_dataset = Subset(dataset, dataset_split_indices['train_indices'])
+        test_dataset = Subset(dataset, dataset_split_indices['test_indices'])
 
     split_indices = {
         'train_indices': train_dataset.indices,
