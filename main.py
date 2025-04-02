@@ -1,15 +1,22 @@
 import math
 from argparse import ArgumentParser
+from datetime import datetime
 from itertools import permutations
 import copy
 
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib.pyplot import xscale
 from tqdm import tqdm
+import seaborn as sns
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from analyze import get_parameter_norms, get_detailed_norms, add_key
+from plot import plot_dicts, get_matrix_norms
 from grokfast import *
 
 
@@ -53,7 +60,7 @@ class Decoder(nn.Module):
         self.position_embeddings = nn.Embedding(seq_len, dim)
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
-            self.layers.append(Block(dim, num_heads))
+            self.layers.append(Block(dim=dim, num_heads=num_heads))
 
         self.ln_f = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, num_tokens, bias=False)
@@ -87,6 +94,145 @@ def multiplication_mod_p_data(p, eq_token, op_token):
     return torch.stack([x, op, y, eq, result])
 
 
+def plot_train_eval(steps_per_epoch, train_acc, val_acc, train_loss, val_loss, plot_infix):
+    steps = torch.arange(len(train_acc)).numpy() * steps_per_epoch
+    sns_plot = 'sns'
+    sns.set_theme()
+
+    trn_np = np.zeros((len(train_acc), 3))
+    trn_np[:, 0], trn_np[:, 1] = steps, np.array(train_acc)
+    trn_np[:, 2] = 0
+    val_np = np.zeros((len(val_acc), 3))
+    val_np[:, 0], val_np[:, 1] = steps, np.array(val_acc)
+    val_np[:, 2] = 1
+    acc_np = np.vstack((trn_np, val_np))
+    acc_df = pd.DataFrame(acc_np, columns=['step', 'val', 'type'])
+    acc_df = acc_df.astype({'step': int, 'val': float, 'type': int})
+    acc_df['type'] = acc_df['type'].replace({0: 'train', 1: 'valid'}).values
+    g_res = sns.lineplot(data=acc_df, x="step", y="val", hue="type")
+    g_res.set(xscale='log')
+    plt.title("Modular Multiplication (training on 50% of data)")
+    plt.ylim(-0.05, 1.05)
+    plt.savefig(f"results/acc_{plot_infix}.png")
+    plt.close()
+
+    trn_np = np.zeros((len(train_loss), 3))
+    trn_np[:, 0], trn_np[:, 1] = steps, np.array(train_loss)
+    trn_np[:, 2] = 0
+    val_np = np.zeros((len(val_acc), 3))
+    val_np[:, 0], val_np[:, 1] = steps, np.array(val_loss)
+    val_np[:, 2] = 1
+    lss_np = np.vstack((trn_np, val_np[2:]))
+    lss_df = pd.DataFrame(lss_np, columns=['step', 'val', 'type'])
+    lss_df = lss_df.astype({'step': int, 'val': float, 'type': int})
+    lss_df['type'] = lss_df['type'].replace({0: 'train', 1: 'valid'}).values
+    g_res = sns.lineplot(data=lss_df, x="step", y="val", hue='type')
+    g_res.set(xscale='log')
+    plt.title("Modular Multiplication (training on 50% of data)")
+    # plt.ylim(0.0, 1.0)
+    # plt.show()
+    plt.savefig(f"results/loss_{plot_infix}.png")
+    plt.close()
+
+
+def plot_norms(norms_history, plot_infix):
+    # steps = torch.arange(len(norms_history['epoch'])).numpy() * steps_per_epoch
+    sns_plot = 'sns'
+    sns.set_theme()
+
+    # nrm_np = np.zeros((len(norms_history['epoch']) * 3, 4))
+    # nrm_np[:, 0], nrm_np[:, 1], nrm_np[:, 2], nrm_np[:, 3] = (steps, np.array(norms_history['attention']),
+    #                                                           np.array(norms_history['mlp']), np.array(norms_history['total']))
+    d = {}
+    # for key in ('attention', 'mlp', 'total'):
+    for key, n in zip(norms_history.keys(), range(len(norms_history.keys()))):
+        if key == 'epoch':
+            continue
+        d[key] = np.zeros((len(norms_history['epoch']), 3))
+        d[key][:, 0], d[key][:, 1] = (norms_history['epoch'],
+                                      np.array(norms_history[key]))
+        d[key][:, 2] = n
+    # nrm_np = np.vstack(d.values())
+    nrm_np = np.concatenate(list(d.values()), axis=0)
+    nrm_df = pd.DataFrame(nrm_np, columns=['step', 'val', 'key'])
+    nrm_df = nrm_df.astype({'step': int, 'val': float, 'key': int})
+    reversed_dict = {n: k for k, n in zip(norms_history.keys(),
+                                          range(len(norms_history.keys())))}
+    nrm_df['key'] = nrm_df['key'].replace(reversed_dict).values
+    g_res = sns.lineplot(data=nrm_df, x="step", y="val", hue="key")
+    g_res.set(xscale='log')
+    plt.title("Modular Multiplication Transformer norms (on 50% of data)")
+    # plt.ylim(-0.05, 1.05)
+    plt.savefig(f"results/norms_{plot_infix}.png")
+    plt.close()
+
+# def plot_some_results(steps_per_epoch, train_acc, val_acc, train_loss, val_loss):
+#     steps = torch.arange(len(train_acc)).numpy() * steps_per_epoch
+#     sns_plot = 'sns'
+#     sns.set_theme()
+#
+#     steps_np = np.concatenate((steps[:-2], steps[:-2], steps[:-2]))
+#
+#     trn_np = np.zeros((len(train_acc), 3))
+#     trn_np[:, 0], trn_np[:, 1] = steps, np.array(train_acc)
+#     trn_np[:, 2] = 0
+#     trn_np = np.vstack((trn_np[0:-2, :], trn_np[1:-1, :], trn_np[2:, :]))
+#     trn_np[:, 0] = steps_np
+#
+#     val_np = np.zeros((len(val_acc), 3))
+#     val_np[:, 0], val_np[:, 1] = steps, np.array(val_acc)
+#     val_np[:, 2] = 1
+#     val_np = np.vstack((val_np[0:-2, :], val_np[1:-1, :], val_np[2:, :]))
+#     val_np[:, 0] = steps_np
+#
+#     acc_np = np.vstack((trn_np, val_np))
+#
+#     acc_df = pd.DataFrame(acc_np, columns=['step', 'val', 'type'])
+#     acc_df = acc_df.astype({'step': int, 'val': float, 'type': int})
+#     acc_df['type'] = acc_df['type'].replace({0: 'train', 1: 'valid'}).values
+#
+#     g_res = sns.lineplot(data=acc_df, x="step", y="val", hue="type")
+#     g_res.set(xscale='log')
+#     plt.title("Modular Multiplication (training on 50% of data)")
+#     plt.ylim(-0.025, 1.025)
+#     # plt.show()
+#     plt.savefig(f"results/acc_{sns_plot}.png")
+#     plt.close()
+#
+#     trn_np = np.zeros((len(train_loss), 3))
+#     trn_np[:, 0], trn_np[:, 1] = steps, np.array(train_loss)
+#     trn_np[:, 2] = 0
+#     trn_np = np.vstack((trn_np[0:-2, :], trn_np[1:-1, :], trn_np[2:, :]))
+#     trn_np[:, 0] = steps_np
+#
+#     val_np = np.zeros((len(val_acc), 3))
+#     val_np[:, 0], val_np[:, 1] = steps, np.array(val_loss)
+#     val_np[:, 2] = 1
+#     val_np = np.vstack((val_np[0:-2, :], val_np[1:-1, :], val_np[2:, :]))
+#     val_np[:, 0] = steps_np
+#
+#     lss_np = np.vstack((trn_np, val_np[2:]))
+#
+#     lss_df = pd.DataFrame(lss_np, columns=['step', 'val', 'type'])
+#     lss_df = lss_df.astype({'step': int, 'val': float, 'type': int})
+#     lss_df['type'] = lss_df['type'].replace({0: 'train', 1: 'valid'}).values
+#
+#     g_res = sns.lineplot(data=lss_df, x="step", y="val", hue='type')
+#     g_res.set(xscale='log')
+#     plt.title("Modular Multiplication (training on 50% of data)")
+#     # plt.ylim(0.0, 1.0)
+#     # plt.show()
+#     plt.savefig(f"results/loss_{sns_plot}.png")
+#     plt.close()
+#
+#     pass
+
+def get_plot_infix(args):
+    # plot model architecture infix
+    ff = datetime.now().strftime("%f")
+    plot_infix = f"l{args.num_layers}_h{args.num_heads}_e{args.embedding}_{ff}"
+    return plot_infix
+
 def main(args):
     torch.manual_seed(args.seed)
 
@@ -103,11 +249,18 @@ def main(args):
     # the answer part of the equation. For all experiments we used a
     # transformer with 2 layers, width 128, and 4 attention heads"
     model = Decoder(
-        dim=128, num_layers=2, num_heads=4, num_tokens=args.p + 2, seq_len=5
+        dim=args.embedding,
+        num_layers=args.num_layers,
+        num_heads=args.num_heads,
+        num_tokens=args.p + 2,
+        seq_len=5
     ).to(device)
     nparams = sum([p.numel() for p in model.parameters() if p.requires_grad])
     print(model)
     print(f'Total number of parameters: {nparams}')
+
+    # plot model architecture infix
+    plot_infix = get_plot_infix(args)
 
     data = multiplication_mod_p_data(args.p, eq_token, op_token)
 
@@ -136,6 +289,24 @@ def main(args):
 
     # For logging network weights.
     net_its, nets = [], []
+    # In your training loop:
+    norms_history = {
+        # 'attention': [],
+        # 'mlp': [],
+        # 'total': [],
+        'epoch': []
+    }
+    acc_dict = {
+        'train': [],
+        'valid': [],
+        'epoch': []
+    }
+    loss_dict = {
+        'train': [],
+        'valid': [],
+        'epoch': []
+    }
+    all_history = {}
 
     for e in tqdm(range(int(args.budget) // steps_per_epoch)):
 
@@ -186,40 +357,49 @@ def main(args):
                 total_acc += acc.item() * input.shape[-1]
 
             if is_train:
+                acc_dict['train'].append(total_acc / train_data.shape[-1])
+                loss_dict['train'].append(total_loss / train_data.shape[-1])
                 train_acc.append(total_acc / train_data.shape[-1])
                 train_loss.append(total_loss / train_data.shape[-1])
                 its.append(i)
+
+                if e % 2 == 0:
+                    with torch.no_grad():  # important for efficiency
+                        norms = get_parameter_norms(model)
+                        for key in norms.keys():
+                            if key not in norms_history.keys():
+                                norms_history[key] = []
+                            norms_history[key].append(norms[key])
+                        norms_history = add_key(norms_history, 'epoch')
+                        norms_history['epoch'].append(i)
+                        all_history["norms"] = norms_history.copy()
+
+                        # detailed_norms = get_detailed_norms(model)
+                        # if 'epoch' not in detailed_norms.keys():
+                        #     detailed_norms['epoch'] = []
+                        # detailed_norms["epoch"].append(i)
+                        # all_history["detailed_norms"] = detailed_norms.copy()
+                        # matrix_norms = get_matrix_norms(model)
+
+                        # det_norms = get_detailed_norms(model)
             else:
+                acc_dict['valid'].append(total_acc / valid_data.shape[-1])
+                loss_dict['valid'].append(total_loss / valid_data.shape[-1])
                 val_acc.append(total_acc / valid_data.shape[-1])
                 val_loss.append(total_loss / valid_data.shape[-1])
+                acc_dict = add_key(acc_dict, 'epoch')
+                acc_dict['epoch'].append(i)
+                loss_dict = add_key(loss_dict, 'epoch')
+                loss_dict['epoch'].append(i)
+            all_history["accuracy"] = acc_dict.copy()
+            all_history["loss"] = loss_dict.copy()
 
         if args.save_weights:
             do_save = e <= 500 or (e > 500 and (e + 1) % 100 == 0) or e == int(args.budget) // steps_per_epoch - 1
         else:
             do_save = (e + 1) % 100 == 0
         if do_save:
-            steps = torch.arange(len(train_acc)).numpy() * steps_per_epoch
-            plt.plot(steps, train_acc, label="train")
-            plt.plot(steps, val_acc, label="val")
-            plt.legend()
-            plt.title("Modular Multiplication (training on 50% of data)")
-            plt.xlabel("Optimization Steps")
-            plt.ylabel("Accuracy")
-            plt.xscale("log", base=10)
-            plt.grid()
-            plt.savefig(f"results/acc_{args.label}.png", dpi=150)
-            plt.close()
-
-            plt.plot(steps, train_loss, label="train")
-            plt.plot(steps, val_loss, label="val")
-            plt.legend()
-            plt.title("Modular Multiplication (training on 50% of data)")
-            plt.xlabel("Optimization Steps")
-            plt.ylabel("Loss")
-            plt.xscale("log", base=10)
-            plt.grid()
-            plt.savefig(f"results/loss_{args.label}.png", dpi=150)
-            plt.close()
+            plot_dicts(dres=all_history, plot_infix=plot_infix)
 
             results = {
                 'its': its,
@@ -229,6 +409,7 @@ def main(args):
                 'val_loss': val_loss,
             }
 
+        if do_save:
             if args.save_weights:
                 net_its.append(e)
                 nets.append(copy.deepcopy(model.state_dict()))
@@ -236,10 +417,17 @@ def main(args):
                 results['net'] = nets
 
             torch.save(results, f"results/res_{args.label}.pt")
+    pass
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
+    # architecture parameters
+    parser.add_argument("--embedding", type=int, default=128)
+    parser.add_argument("--num_layers", type=int, default=2)
+    parser.add_argument("--num_heads", type=int, default=4)
+
+    # run params
     parser.add_argument("--label", default="")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--p", type=int, default=97)
