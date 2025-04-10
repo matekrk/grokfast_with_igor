@@ -224,9 +224,9 @@ class WeightSpaceTracker:
             elif isinstance(highlight_epochs, dict):
                 for key, val in highlight_epochs.items():
                     if key == 'grok':
-                        color, off_x, off_y = 'ro', -0.01, -0.01
+                        color, off_x, off_y = 'ro', +0.01, -0.03
                     else:
-                        color, off_x, off_y = 'go', -0.01, +0.01
+                        color, off_x, off_y = 'go', +0.01, +0.03
                     for epoch in highlight_epochs[key]:
                         if epoch in self.weight_timestamps and epoch >= min_epoch_to_mark:
                             idx = self.weight_timestamps.index(epoch)
@@ -237,8 +237,8 @@ class WeightSpaceTracker:
                             )
                             fstr = f'grok {epoch}' if key == 'grok' else f'{epoch}'
                             ax1.text(
-                                trajectory[idx, selected_dims[0]] - off_x,
-                                trajectory[idx, selected_dims[1]] - off_y,
+                                trajectory[idx, selected_dims[0]] + off_x,
+                                trajectory[idx, selected_dims[1]] + off_y,
                                 fstr, fontsize=9
                             )
 
