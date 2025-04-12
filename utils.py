@@ -2,6 +2,9 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+import numpy as np
+
+
 # info asynchronous unlinking of several files; perhaps the direct use of os.remove,
 #  as well as asynchronous actions may speed up?
 async def remove_files_async(file_list):
@@ -66,3 +69,27 @@ def init_val_dataloader_state(dataloader):
         'pin_memory': dataloader.pin_memory,
         'drop_last': dataloader.drop_last
     }
+
+class FittingScore:
+    def __init__(self):
+        self.min_train_loss = +1.e+6
+        self.min_eval_loss = +1.e+6
+        self.max_train_loss = -1.0e+6
+        self.max_eval_loss = -1.0e+6
+        self.epsilon = 1.0e-6
+
+    def normalize(self, loss, min_loss, max_loss):
+        # return (loss - self.min_train_loss) / (self.max_train_loss - self.min_train_loss + self.epsilon)
+        return (loss - min_loss) / max((max_loss - min_loss), self.epsilon)
+
+    def __call__(self, train_loss, train_accu, eval_loss, eval_accu):
+        return self.fitting_score(train_loss, train_accu, eval_loss, eval_accu)
+
+    def fitting_score(self, train_loss, train_accu, eval_loss, eval_accu):
+        self.min_train_loss = max(-1.e+6, min(train_loss, self.min_train_loss))
+        self.min_eval_loss = max(-1.e+6, min(eval_loss, self.min_eval_loss))
+        self.max_train_loss = min(+1.e+6, max(train_loss, self.max_train_loss))
+        self.max_eval_loss = min(+1.e+6, max(eval_loss, self.max_eval_loss))
+        return ((1. - np.abs(train_accu - eval_accu)) *
+                (1. - np.abs(self.normalize(train_loss, min_loss=self.min_train_loss, max_loss=self.max_train_loss) -
+                             self.normalize(eval_loss, min_loss=self.min_eval_loss, max_loss=self.max_eval_loss))))

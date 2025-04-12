@@ -27,7 +27,7 @@ class Block(nn.Module):
         self.head_dim = dim // num_heads
         self.mlp_hidden_mult = mlp_hidden_mult
 
-        # Store attention weights for analysis
+        # info store attention weights for analysis
         self.attention_weights = None
         self.store_attention_weights = False
 
@@ -129,7 +129,7 @@ class Decoder(nn.Module):
         self.ln_f = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, num_tokens, bias=False)
 
-        # Analysis settings
+        # info analysis settings
         self.dim = dim
         self.num_layers = num_layers
         self.num_heads = num_heads
@@ -139,21 +139,21 @@ class Decoder(nn.Module):
 
         self.device = device
 
-        # loss function for evaluation
+        # info loss function for evaluation
         self.criterion = criterion
 
-        # History tracking for analysis
+        # info history tracking for analysis
         self.id = id if id else f"decoder_l{num_layers}_h{num_heads}_e{dim}_t{num_tokens}_s{seq_len}_r{ratio:.1f}"
         self.train_history = defaultdict(list)
         self.logger = DataLogger(id=self.id)
         self.current_step = 0
         self.current_epoch = 0
 
-        # plotting name
+        # info plotting name
         self.plot_prefix = f"{self.id}"
         print(f"plot_prefix: {self.plot_prefix}")
 
-        # savedir
+        # info savedir
         self.save_dir = save_dir
         self.checkpoint_dir = checkpoint_dir
 

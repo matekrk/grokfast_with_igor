@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 import pandas as pd
-from scipy.signal import savgol_filter
+# from scipy.signal import savgol_filter
 from scipy.ndimage import gaussian_filter
 from scipy.linalg import eigh
 
@@ -54,7 +54,7 @@ class JumpAnalysisTools:
         """
         jump_id = f"jump_{jump_epoch}"
 
-        # Find the jump index in the weight_timestamps
+        # # info find the jump index in the weight_timestamps
         jump_idx = None
         for i, epoch in enumerate(weight_tracker.weight_timestamps):
             if epoch == jump_epoch:
@@ -65,40 +65,40 @@ class JumpAnalysisTools:
             print(f"No snapshot found for jump at epoch {jump_epoch}")
             return None
 
-        # Get snapshots before, at, and after the jump
+        # info get snapshots before, at, and after the jump
         before_idx = max(0, jump_idx - 1)
 
-        # Check if we have a valid "after" snapshot
+        # info check if we have a valid "after" snapshot
         after_idx = min(len(weight_tracker.weight_timestamps) - 1, jump_idx + 1)
         after_epoch = weight_tracker.weight_timestamps[after_idx]
 
-        # If after_idx points to the same epoch as jump_idx, we need to create a new snapshot
+        # info if after_idx points to the same epoch as jump_idx, we need to create a new snapshot
         if after_epoch == jump_epoch and ensure_after_snapshot:
             print(f"Creating additional 'after jump' snapshot for epoch {jump_epoch}")
 
-            # Store current model state
+            # info store current model state
             current_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
-            # Create a new snapshot labeled as "after jump"
+            # info create a new snapshot labeled as "after jump"
             after_epoch = jump_epoch + 0.1  # Use fraction to indicate it's right after jump
             weight_tracker.take_snapshot(epoch=after_epoch, force=True)
 
-            # Find the new snapshot
+            # info find the new snapshot
             after_idx = len(weight_tracker.weight_timestamps) - 1
 
-            # Restore current state
+            # info restore current state
             self.model.load_state_dict(current_state)
 
         before_snapshot = weight_tracker.weight_snapshots[before_idx]
         jump_snapshot = weight_tracker.weight_snapshots[jump_idx]
         after_snapshot = weight_tracker.weight_snapshots[after_idx]
-        # When analyzing a jump
+        # info then analyzing a jump
         before_epoch = before_snapshot['epoch']
         jump_epoch = jump_snapshot['epoch']
         after_epoch = after_snapshot['epoch']
         print(f"Landscape: analyzing jump at {jump_epoch} with before={before_epoch}, after={after_epoch}")
 
-        # Analyze the loss landscape around each of these points
+        # info analyze the loss landscape around each of these points
         results = {
             'jump_epoch': jump_epoch,
             'before_epoch': before_snapshot['epoch'],
@@ -107,23 +107,23 @@ class JumpAnalysisTools:
             'landscape_analysis': {}
         }
 
-        # Store original model state
+        # info store original model state
         original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
         try:
-            # Analyze each state (before, jump, after)
+            # info analyze each state (before, jump, after)
             for state_name, snapshot in [
                 ('before', before_snapshot),
                 ('jump', jump_snapshot),
                 ('after', after_snapshot)
             ]:
-                # Log which snapshot we're analyzing
+                # info log which snapshot we're analyzing
                 print(f"Analyzing {state_name} state at epoch {snapshot['epoch']}")
 
-                # Load the state
+                # info load the state
                 self.model.load_state_dict(snapshot['state_dict'])
 
-                # Analyze curvature at this point
+                # info analyze curvature at this point
                 curvature = self.analyze_loss_curvature(
                     inputs=inputs,
                     targets=targets,
@@ -135,21 +135,21 @@ class JumpAnalysisTools:
 
                 results['landscape_analysis'][state_name] = curvature
 
-                # Create visualization
+                # info create visualization
                 self._visualize_loss_landscape(
                     curvature,
                     f"{jump_id}_{state_name}",
                     snapshot['epoch']
                 )
 
-            # Create comparative visualization
+            # info create comparative visualization
             self._visualize_landscape_comparison(results, jump_id)
 
         finally:
-            # Restore original model state
+            # info restore original model state
             self.model.load_state_dict(original_state)
 
-        # Save the results
+        # info save the results
         if self.logger:
             self.logger.log_data('loss_landscape', f'jump_{jump_epoch}_eigenvalues',
                                  results['landscape_analysis']['jump']['eigenvalues'].tolist())
@@ -172,15 +172,15 @@ class JumpAnalysisTools:
         Returns:
             dict: Curvature statistics
         """
-        # Store original parameters
+        # info store original parameters
         original_params = [p.detach().clone() for p in self.model.parameters()]
 
-        # Calculate loss at current position
+        # info calculate loss at current position
         with torch.no_grad():
             outputs = self.model(inputs)
             base_loss = criterion(outputs, targets).item()
 
-        # Generate random orthogonal directions
+        # info generate random orthogonal directions
         directions = []
         for _ in range(n_directions):
             direction = []
@@ -191,7 +191,7 @@ class JumpAnalysisTools:
                 direction.append(d)
             directions.append(direction)
 
-        # Sample the loss landscape for each pair of directions
+        # info sample the loss landscape for each pair of directions
         landscapes = []
 
         for i in range(0, n_directions, 2):
@@ -199,7 +199,7 @@ class JumpAnalysisTools:
                 direction1 = directions[i]
                 direction2 = directions[i + 1]
 
-                # Sample grid of points
+                # info sample grid of points
                 steps = np.linspace(-step_size * n_steps, step_size * n_steps, 2 * n_steps + 1)
                 landscape = np.zeros((len(steps), len(steps)))
 
@@ -216,7 +216,7 @@ class JumpAnalysisTools:
                             loss = criterion(outputs, targets).item()
                             landscape[j, k] = loss
 
-                # Store the landscape
+                # info store the landscape
                 landscapes.append({
                     'landscape': landscape,
                     'steps': steps,
@@ -224,21 +224,21 @@ class JumpAnalysisTools:
                     'direction2': direction2
                 })
 
-        # Restore original parameters
+        # info restore original parameters
         with torch.no_grad():
             for p, p0 in zip(self.model.parameters(), original_params):
                 p.copy_(p0)
 
-        # Calculate curvature statistics from the first landscape
+        # info calculate curvature statistics from the first landscape
         if landscapes:
-            # Smooth the landscape
+            # info smooth the landscape
             smoothed = gaussian_filter(landscapes[0]['landscape'], sigma=1.0)
 
-            # Finite difference Hessian at the center
+            # info finite difference Hessian at the center
             center_idx = n_steps
             dx = step_size
 
-            # Central finite difference for second derivatives
+            # info central finite difference for second derivatives
             dxx = (smoothed[center_idx + 1, center_idx] - 2 * smoothed[center_idx, center_idx] + smoothed[
                 center_idx - 1, center_idx]) / dx ** 2
             dyy = (smoothed[center_idx, center_idx + 1] - 2 * smoothed[center_idx, center_idx] + smoothed[
@@ -246,19 +246,19 @@ class JumpAnalysisTools:
             dxy = (smoothed[center_idx + 1, center_idx + 1] - smoothed[center_idx + 1, center_idx - 1] - smoothed[
                 center_idx - 1, center_idx + 1] + smoothed[center_idx - 1, center_idx - 1]) / (4 * dx ** 2)
 
-            # Construct Hessian
+            # info construct Hessian
             hessian = np.array([[dxx, dxy], [dxy, dyy]])
 
-            # Eigenvalues of Hessian
+            # info eigenvalues of Hessian
             eigvals, eigvecs = eigh(hessian)
         else:
-            # Default values if no landscape was computed
+            # info default values if no landscape was computed
             hessian = np.array([[0, 0], [0, 0]])
             eigvals = np.array([0, 0])
             eigvecs = np.array([[1, 0], [0, 1]])
             smoothed = np.zeros((2 * n_steps + 1, 2 * n_steps + 1))
 
-        # Store in history
+        # info store in history
         self.loss_curvature_history.append({
             'eigenvalues': eigvals,
             'max_curvature': max(abs(eigvals)) if len(eigvals) > 0 else 0,
@@ -266,7 +266,7 @@ class JumpAnalysisTools:
             'condition_number': max(abs(eigvals)) / (min(abs(eigvals)) + 1e-10) if len(eigvals) > 0 else 0
         })
 
-        # Results
+        # info results
         curvature = {
             'base_loss': base_loss,
             'landscapes': landscapes,
@@ -318,7 +318,7 @@ class JumpAnalysisTools:
 
             # Use formatted epoch for title
             epoch_str = f"{epoch:.1f}" if isinstance(epoch, float) else f"{epoch}"
-            ax.set_title(f'Loss Landscape at Epoch {epoch_str} (Direction {i + 1})')
+            ax.set_title(f'{self.model.plot_prefix}: Loss Landscape at Epoch {epoch_str} (Direction {i + 1})')
             ax.set_xlabel('Direction 1')
             ax.set_ylabel('Direction 2')
 
@@ -329,15 +329,15 @@ class JumpAnalysisTools:
     def _visualize_landscape_comparison(self, results, jump_id):
         """Create a comparative visualization of landscapes before/during/after jump"""
         # Extract eigenvalues
-        before_eigs = results['landscape_analysis']['before']['eigenvalues']
+        before_eigs = results['landscape_analysis']['pre_jump']['eigenvalues']
         jump_eigs = results['landscape_analysis']['jump']['eigenvalues']
-        after_eigs = results['landscape_analysis']['after']['eigenvalues']
+        after_eigs = results['landscape_analysis']['post_jump']['eigenvalues']
 
         # Plot eigenvalue comparison
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
         # Plot eigenvalues
-        epochs = [results['before_epoch'], results['jump_epoch'], results['after_epoch']]
+        epochs = [results['pre_jump_epoch'], results['jump_epoch'], results['post_jump_epoch']]
         # Format the epoch values for display
         epoch_labels = [f"{e:.1f}" if isinstance(e, float) else f"{e}" for e in epochs]
 
@@ -351,14 +351,14 @@ class JumpAnalysisTools:
         ax1.set_xticklabels(epoch_labels)
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Eigenvalue')
-        ax1.set_title('Hessian Eigenvalues Around Jump')
+        ax1.set_title(f'Hessian Eigenvalues Around Jump {self.model.plot_prefix}')
         ax1.legend()
 
         # Plot condition number
         conds = [
-            results['landscape_analysis']['before']['condition_number'],
+            results['landscape_analysis']['pre_jump']['condition_number'],
             results['landscape_analysis']['jump']['condition_number'],
-            results['landscape_analysis']['after']['condition_number']
+            results['landscape_analysis']['post_jump']['condition_number']
         ]
 
         ax2.plot(range(len(epochs)), conds, 'o-')
@@ -367,7 +367,7 @@ class JumpAnalysisTools:
         ax2.set_xticklabels(epoch_labels)
         ax2.set_xlabel('Epoch')
         ax2.set_ylabel('Condition Number')
-        ax2.set_title('Loss Landscape Condition Number')
+        ax2.set_title(f'Loss Landscape Condition Number {self.model.plot_prefix}')
 
         # Add labels clarifying the states
         for i, state in enumerate(['Before Jump', 'Jump Point', 'After Jump']):
@@ -380,14 +380,14 @@ class JumpAnalysisTools:
         plt.close(fig)
 
         # Combine landscapes in a single figure
-        if results['landscape_analysis']['before']['landscapes'] and \
+        if results['landscape_analysis']['pre_jump']['landscapes'] and \
                 results['landscape_analysis']['jump']['landscapes'] and \
-                results['landscape_analysis']['after']['landscapes']:
+                results['landscape_analysis']['post_jump']['landscapes']:
 
             fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
             for i, (state, ax) in enumerate(zip(
-                    ['before', 'jump', 'after'],
+                    ['pre_jump', 'jump', 'post_jump'],
                     axes
             )):
                 landscape = results['landscape_analysis'][state]['smoothed_landscape']
@@ -397,13 +397,14 @@ class JumpAnalysisTools:
                 epoch = epochs[i]
                 epoch_str = f"{epoch:.1f}" if isinstance(epoch, float) else f"{epoch}"
                 state_labels = ['Before Jump', 'At Jump', 'After Jump']
-                ax.set_title(f"{state_labels[i]} (Epoch {epoch_str})")
+                ax.set_title(f"{state_labels[i]} (Epoch {epoch_str}) {self.model.plot_prefix}")
 
                 plt.colorbar(im, ax=ax)
 
             plt.tight_layout()
             plt.savefig(self.loss_landscape_dir / f"{jump_id}_landscape_comparison.png")
             plt.close(fig)
+
 
     def analyze_head_attribution_around_jump(self, jump_epoch, eval_loader, weight_tracker, ensure_after_snapshot=True):
         """
@@ -564,7 +565,7 @@ class JumpAnalysisTools:
             ax=ax1
         )
 
-        ax1.set_title('Head Attribution Around Jump')
+        ax1.set_title(f'Head Attribution Around Jumpm {self.model.plot_prefix}')
         ax1.set_xlabel('Head')
         ax1.set_ylabel('Attribution Score')
         ax1.legend(title='State')
@@ -594,7 +595,7 @@ class JumpAnalysisTools:
             ax=ax2
         )
 
-        ax2.set_title('Head Attribution Changes')
+        ax2.set_title(f'Head Attribution Changes: {self.model.plot_prefix}')
         ax2.set_xlabel('Head')
         ax2.set_ylabel('Attribution Change')
         ax2.legend(title='Transition')
@@ -625,7 +626,7 @@ class JumpAnalysisTools:
             ax=ax
         )
 
-        ax.set_title(f'Head Attribution Comparison Around Jump at Epoch {results["jump_epoch"]}')
+        ax.set_title(f'Head Attribution Comparison Around Jump at Epoch {results["jump_epoch"]} {self.model.plot_prefix}')
 
         plt.tight_layout()
         plt.savefig(self.attribution_dir / f"{jump_id}_attribution_heatmap.png")
@@ -805,7 +806,7 @@ class JumpAnalysisTools:
             ax=ax1
         )
 
-        ax1.set_title('Attention Entropy Around Jump')
+        ax1.set_title(f'Attention Entropy Around Jump {self.model.plot_prefix}')
         ax1.set_xlabel('Head')
         ax1.set_ylabel('Entropy (lower = more specialized)')
         ax1.legend(title='State')
@@ -835,7 +836,7 @@ class JumpAnalysisTools:
             ax=ax2
         )
 
-        ax2.set_title('Attention Entropy Changes')
+        ax2.set_title(f'Attention Entropy Changes {self.model.plot_prefix}')
         ax2.set_xlabel('Head')
         ax2.set_ylabel('Entropy Change')
         ax2.legend(title='Transition')
@@ -880,10 +881,85 @@ class JumpAnalysisTools:
                 state_labels = ['Before Jump', 'At Jump', 'After Jump']
                 ax.set_title(f"{state_labels[i]} (Epoch {epoch_str})")
 
-            plt.suptitle(f'Attention Pattern Comparison for {head}', y=1.05)
+            plt.suptitle(f'Attention Pattern Comparison for {head} {self.model.plot_prefix}', y=1.05)
             plt.tight_layout()
 
             # Save the figure
             head_safe = head.replace(':', '_').replace('.', '_')
             plt.savefig(self.attention_dir / f"{jump_id}_{head_safe}_pattern_comparison.png")
             plt.close(fig)
+
+    def analyze_jump_with_snapshots(self, jump_epoch, pre_jump_snapshot, jump_snapshot,
+                                    post_jump_snapshot, inputs, targets, criterion):
+        """
+        Analyze a jump using explicit pre-jump, jump, and post-jump snapshots
+
+        Args:
+            jump_epoch: The epoch of the jump
+            pre_jump_snapshot: Snapshot from just before the jump
+            jump_snapshot: Snapshot at the jump
+            post_jump_snapshot: Snapshot after the jump
+            inputs, targets: Batch of data for loss calculation
+            criterion: Loss function
+
+        Returns:
+            dict: Analysis results around the jump
+        """
+        jump_id = f"jump_{jump_epoch}"
+
+        # Prepare the results structure
+        results = {
+            'jump_epoch': jump_epoch,
+            'pre_jump_epoch': pre_jump_snapshot['epoch'],
+            'jump_epoch': jump_snapshot['epoch'],
+            'post_jump_epoch': post_jump_snapshot['epoch'],
+            'landscape_analysis': {}
+        }
+
+        # Store original model state
+        original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+
+        try:
+            # Analyze each state (pre-jump, jump, post-jump)
+            for state_name, snapshot in [
+                ('pre_jump', pre_jump_snapshot),
+                ('jump', jump_snapshot),
+                ('post_jump', post_jump_snapshot)
+            ]:
+                # Log which snapshot we're analyzing
+                print(f"Analyzing {state_name} state at epoch {snapshot['epoch']}")
+
+                # Load the state
+                self.model.load_state_dict(snapshot['state_dict'])
+
+                # Analyze curvature at this point
+                curvature = self.analyze_loss_curvature(
+                    inputs=inputs,
+                    targets=targets,
+                    criterion=criterion
+                )
+
+                results['landscape_analysis'][state_name] = curvature
+
+                # Create visualization
+                self._visualize_loss_landscape(
+                    curvature,
+                    f"{jump_id}_{state_name}",
+                    snapshot['epoch']
+                )
+
+            # Create comparative visualization
+            self._visualize_landscape_comparison(results, jump_id)
+
+        finally:
+            # Restore original model state
+            self.model.load_state_dict(original_state)
+
+        # Save the results
+        if self.logger:
+            self.logger.log_data('loss_landscape', f'jump_{jump_epoch}_eigenvalues',
+                                 results['landscape_analysis']['jump']['eigenvalues'].tolist())
+            self.logger.log_data('loss_landscape', f'jump_{jump_epoch}_condition_number',
+                                 results['landscape_analysis']['jump']['condition_number'])
+
+        return results

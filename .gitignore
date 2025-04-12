@@ -162,9 +162,10 @@ cython_debug/
 #.idea/
 
 # grokfast_with_igor project
-.assets/
-.results/
-.stats/
+./assets/
+./results/
+./stats/
+./gists/
 # some single files not to add
 analysis_gist.py
 updated_analysis_gist.py

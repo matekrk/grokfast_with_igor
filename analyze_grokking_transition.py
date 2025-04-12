@@ -58,7 +58,7 @@ def identify_grokking_checkpoint(model_dir):
         "seq_len": checkpoint.get("seq_len", 5)
     }
 
-    # If model info is missing, try to infer from the model state dictionary
+    # info If model info is missing, try to infer from the model state dictionary
     model_state = checkpoint["model_state_dict"]
     if "dim" not in checkpoint and "token_embeddings.weight" in model_state:
         model_config["dim"] = model_state["token_embeddings.weight"].size(1)

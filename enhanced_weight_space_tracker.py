@@ -12,7 +12,9 @@ class EnhancedWeightSpaceTracker:
     """Enhanced tracker for model's trajectory in weight space with jump detection and analysis"""
 
     def __init__(self, model, save_dir, logger=None, pca_components=50, snapshot_freq=10,
-                 jump_detection_window=100, jump_threshold=1.0):
+                 sliding_window_size=5, dense_sampling=True, jump_detection_window=100,
+                 jump_threshold=1.0):
+        # Existing initialization code...
         self.model = model
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True, parents=True)
@@ -21,6 +23,10 @@ class EnhancedWeightSpaceTracker:
         self.jump_detection_window = jump_detection_window
         self.jump_threshold = jump_threshold
         self.logger = logger if logger else model.logger if hasattr(model, 'logger') else None
+
+        # Add sliding window parameters
+        self.sliding_window_size = sliding_window_size  # Number of recent epochs to keep
+        self.dense_sampling = dense_sampling  # Whether to sample more densely between snapshots
 
         # Storage for weight snapshots and trajectories
         self.weight_snapshots = []
@@ -31,15 +37,22 @@ class EnhancedWeightSpaceTracker:
         self.pca = None
         self.pca_fitted = False
 
+        # todo perhaps it would be better to track ALL the snapshots, but then remove these that were NOT used?
+
+        # info sliding window of recent states (more frequent than main snapshots)
+        self.recent_snapshots = []  # info shall contain (epoch, state_dict, flattened_vector) tuples
+        self.last_jump_epoch = None  # info track when the last jump occurred
+
         # Jump detection
         self.detected_jumps = []
         self.jump_analysis = {}
+        self.pending_jumps = []  # info track jumps that need analysis
 
         # Create directories for detailed analysis
         self.jump_dir = self.save_dir / "jump_analysis"
         self.jump_dir.mkdir(exist_ok=True, parents=True)
 
-        # last label height for "jump at {epoch}"
+        # label height for "jump at {epoch}"
         self.label_height = 0.0
         self.label_height_shift = 0.09
 
@@ -47,11 +60,8 @@ class EnhancedWeightSpaceTracker:
         self.jump_counter = 0
 
     def take_snapshot(self, epoch, force=False):
-        """Take a snapshot of the current model weights"""
-        if not force and epoch % self.snapshot_freq != 0:
-            return False
-
-        # Flatten all weights into a single vector
+        """Take a snapshot of the current model weights with improved jump detection"""
+        # Always flatten weights for potential sliding window storage
         flattened = []
         for name, param in self.model.named_parameters():
             if 'weight' in name:  # Only consider weight matrices, not biases
@@ -59,43 +69,72 @@ class EnhancedWeightSpaceTracker:
 
         flattened_vector = torch.cat(flattened).numpy()
 
-        # Only store if this is the first snapshot or significant change occurred
+        # info heck if we should add this to the sliding window (more frequent than main snapshots)
+        #  either we're doing dense sampling or this is a regular snapshot point
+        should_add_to_window = self.dense_sampling or epoch % self.snapshot_freq == 0
+
+        if should_add_to_window:
+            # Store state in sliding window
+            state_dict = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+            self.recent_snapshots.append((epoch, state_dict, flattened_vector))
+
+            # info maintain window size
+            while len(self.recent_snapshots) > self.sliding_window_size:
+                self.recent_snapshots.pop(0)
+
+        # info regular snapshot logic - only at snapshot_freq intervals or when forced
+        if not force and epoch % self.snapshot_freq != 0:
+            return False
+
+        # info store only  in main trajectory if this is the first snapshot or significant change occurred
         should_store = False
         if len(self.flattened_weights) == 0:
             should_store = True
         else:
-            # Calculate velocity (change in weights)
+            # info calculate and store velocity (change in weights)
             velocity = flattened_vector - self.flattened_weights[-1]
             velocity_norm = np.linalg.norm(velocity)
-
-            # Store the velocity
             self.velocities.append((epoch, velocity, velocity_norm))
 
-            # Calculate acceleration if we have at least two velocities
+            # info calculate acceleration if we have at least two velocities
             if len(self.velocities) >= 2:
                 prev_velocity = self.velocities[-2][1]
                 acceleration = velocity - prev_velocity
                 acceleration_norm = np.linalg.norm(acceleration)
                 self.accelerations.append((epoch, acceleration, acceleration_norm))
 
-            # Decide whether to store based on change
+            # info decide whether to store based on change
             should_store = force or velocity_norm > 1e-6
 
-            # Check for jumps - requires some history
+            # info check for jumps - requires some history
             if len(self.velocities) > self.jump_detection_window:
-                self._check_for_jumps(epoch, velocity_norm)
+                jump_detected = self._check_for_jumps(epoch, velocity_norm)
+
+                # info if a jump is detected, queue it for analysis with pre-jump state
+                if jump_detected:
+                    # Find the most recent pre-jump snapshot from sliding window
+                    pre_jump_snapshot = self._find_pre_jump_snapshot(epoch)
+                    if pre_jump_snapshot:
+                        pre_jump_epoch, pre_jump_state, pre_jump_vector = pre_jump_snapshot
+                        # info store this explicitly as a "pre-jump" snapshot
+                        self.pending_jumps.append({
+                            'jump_epoch': epoch,
+                            'pre_jump_epoch': pre_jump_epoch,
+                            'pre_jump_state': pre_jump_state,
+                            'pre_jump_vector': pre_jump_vector
+                        })
 
         if should_store:
             self.flattened_weights.append(flattened_vector)
             self.weight_timestamps.append(epoch)
 
-            # Store model state dictionary for later detailed analysis
+            # info store model state dictionary for later detailed analysis
             self.weight_snapshots.append({
                 'epoch': epoch,
                 'state_dict': {k: v.detach().cpu() for k, v in self.model.state_dict().items()}
             })
 
-            # Log the snapshot event
+            # info log the snapshot event
             if self.logger:
                 self.logger.log_data('weight_space_tracking', 'snapshot_epochs', epoch)
 
@@ -103,19 +142,122 @@ class EnhancedWeightSpaceTracker:
 
         return False
 
+
+    def _find_pre_jump_snapshot(self, jump_epoch):
+        """Find the most recent snapshot before the jump epoch"""
+        # Sort snapshots by epoch in descending order
+        sorted_snapshots = sorted(self.recent_snapshots, key=lambda x: x[0], reverse=True)
+
+        # info find the most recent snapshot that's before the jump epoch
+        for snapshot in sorted_snapshots:
+            if snapshot[0] < jump_epoch:
+                return snapshot
+
+        # info if no suitable snapshot found, return None
+        return None
+
+    def analyze_pending_jumps(self, inputs, targets, criterion, jump_analyzer):
+        """Analyze any pending jumps with pre-jump states"""
+        if not self.pending_jumps:
+            return None
+
+        results = []
+
+        for pending_jump in self.pending_jumps:
+            jump_epoch = pending_jump['jump_epoch']
+            pre_jump_epoch = pending_jump['pre_jump_epoch']
+            pre_jump_state = pending_jump['pre_jump_state']
+
+            # Find the jump snapshot
+            jump_snapshot = None
+            for snapshot in self.weight_snapshots:
+                if snapshot['epoch'] == jump_epoch:
+                    jump_snapshot = snapshot
+                    break
+
+            if jump_snapshot is None:
+                print(f"Warning: Jump snapshot for epoch {jump_epoch} not found")
+                continue
+
+            # Find the next snapshot after the jump
+            post_jump_snapshot = None
+            for snapshot in self.weight_snapshots:
+                if snapshot['epoch'] > jump_epoch:
+                    post_jump_snapshot = snapshot
+                    break
+
+            # If no post-jump snapshot exists, create a simulated one at jump_epoch + 0.1
+            if post_jump_snapshot is None:
+                # Use current model state for post-jump (will be saved as jump_epoch + 0.1)
+                post_jump_snapshot = {
+                    'epoch': jump_epoch + 0.1,
+                    'state_dict': {k: v.detach().cpu() for k, v in self.model.state_dict().items()}
+                }
+
+            # Create a "pre-jump" snapshot explicitly
+            pre_jump_snapshot = {
+                'epoch': pre_jump_epoch,
+                'state_dict': pre_jump_state
+            }
+
+            # Now we have balanced pre_jump, jump, and post_jump snapshots
+            print(f"Analyzing jump at {jump_epoch} with pre={pre_jump_epoch}, post={post_jump_snapshot['epoch']}")
+
+            # Perform the analysis with these snapshots
+            result = jump_analyzer.analyze_jump_with_snapshots(
+                jump_epoch=jump_epoch,
+                pre_jump_snapshot=pre_jump_snapshot,
+                jump_snapshot=jump_snapshot,
+                post_jump_snapshot=post_jump_snapshot,
+                inputs=inputs,
+                targets=targets,
+                criterion=criterion
+            )
+
+            results.append(result)
+
+        # Clear pending jumps after analysis
+        self.pending_jumps = []
+
+        return results
+
+
     def _check_for_jumps(self, epoch, current_velocity_norm):
         """Check if a jump has occurred based on velocity patterns"""
-        # Get recent velocity norms
+        # info get recent velocity norms
         recent_norms = [v[2] for v in self.velocities[-self.jump_detection_window:]]
-        mean_norm = np.mean(recent_norms[:-1])  # Mean of all except current
-        std_norm = np.std(recent_norms[:-1])  # Std of all except current
+        mean_norm = np.mean(recent_norms[:-1])  # info mean of all except current
+        std_norm = np.std(recent_norms[:-1])  # info std of all except current
 
-        # A jump is detected if velocity is significantly higher than recent history
-        # Using Z-score threshold for detection
+        # info a jump is detected if velocity is significantly higher than recent history
+        #  using Z-score threshold for detection
         z_score = (current_velocity_norm - mean_norm) / (std_norm + 1e-8)
 
-        if z_score > self.jump_threshold:
-            # Mark this epoch as a jump point
+        # info set a minimum absolute threshold as well as a relative threshold
+        # info adjust this based to typical problem velocity
+        # fixme todo grow if there was a jump detected at last step (in detection window[-1]?)
+        #  how to decrease it then? Perhaps decrease if in the current there is no jump then set to minimum (or standard) value?
+        minimum_velocity_threshold = 0.5
+
+        # info check both relative significance (z-score) AND absolute magnitude
+        is_jump = (z_score > self.jump_threshold) and (current_velocity_norm > minimum_velocity_threshold)
+
+        # info mpose minimum distance between detected jumps (at least 5 epochs)
+        if is_jump and self.last_jump_epoch is not None:
+            # todo fixme the same might be done here, but it probably does not work?
+            min_jump_distance = 5
+            if epoch - self.last_jump_epoch < min_jump_distance:
+                is_jump = False  # Too close to the last jump, ignore
+
+        # info add an additional filter to avoid detecting jumps when velocity is consistently low
+        if is_jump and mean_norm < 0.1 and current_velocity_norm < 0.5:  # Adjust thresholds as needed
+            is_jump = False  # Likely noise, not a significant jump
+
+        if is_jump:
+            # info update last jump epoch
+            self.last_jump_epoch = epoch
+
+            # info mark this epoch as a jump point
             self.detected_jumps.append({
                 'epoch': epoch,
                 'velocity_norm': current_velocity_norm,
@@ -124,14 +266,11 @@ class EnhancedWeightSpaceTracker:
                 'std_norm': std_norm
             })
 
-            # Log the jump
+            # info log the jump
             if self.logger:
                 self.logger.log_data('weight_space_jumps', 'jump_epochs', epoch)
                 self.logger.log_data('weight_space_jumps', 'jump_velocity_norms', current_velocity_norm)
                 self.logger.log_data('weight_space_jumps', 'jump_z_scores', z_score)
-
-            # Trigger detailed analysis of this jump
-            self._analyze_jump(epoch, z_score)
 
             return True
 
@@ -492,7 +631,7 @@ class EnhancedWeightSpaceTracker:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
 
         # Plot trajectory
-        ax1.plot(trajectory[:, selected_dims[0]], trajectory[:, selected_dims[1]], 'o-', alpha=0.6)
+        ax1.plot(trajectory[:, selected_dims[0]], trajectory[:, selected_dims[1]], 'o-', markersize=6, alpha=0.6)
 
         # Add arrows to show direction
         for i in range(1, len(trajectory)):
@@ -597,7 +736,7 @@ class EnhancedWeightSpaceTracker:
             for epoch in jump_epochs:
                 ax2.axvline(x=epoch, color='purple', linestyle='--', lw=1.0, alpha=0.5)
 
-            ax2.set_title('Weight Space Velocity and Acceleration')
+            ax2.set_title(f'Weight Space Velocity and Acceleration: {self.model.plot_prefix}')
 
         plt.tight_layout()
         save_path = self.save_dir / f'weight_trajectory_with_jumps_dims_{selected_dims[0]}_{selected_dims[1]}.png'

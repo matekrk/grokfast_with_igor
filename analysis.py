@@ -186,7 +186,7 @@ def train_with_analysis(model: object, train_loader: object, eval_loader: object
                                           force_save=False,
                                           )
 
-    # Final detailed analysis
+    # info final detailed analysis
     print("\nFinal Analysis:")
     visualize_model_analysis(model=model, epoch=epoch,
                              eval_loader=eval_loader,
