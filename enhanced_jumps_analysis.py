@@ -9,15 +9,15 @@ from jump_analysis_tools import JumpAnalysisTools
 from utils import init_train_dataloader_state, FittingScore
 
 
-def train_with_enhanced_analysis(model, train_loader, eval_loader,
-                                 dataset_split_indices,
-                                 criterion, optimizer, scheduler,
-                                 epochs, device,
-                                 checkpointManager,
-                                 log_interval=5,
-                                 analyze_interval=50,
-                                 jump_detection_threshold=2.0,
-                                 checkpoint_interval=200):
+def train_with_enhanced_jumps_analysis(model, train_loader, eval_loader,
+                                       dataset_split_indices,
+                                       criterion, optimizer, scheduler,
+                                       epochs, device,
+                                       checkpointManager,
+                                       log_interval=5,
+                                       analyze_interval=50,
+                                       jump_detection_threshold=2.0,
+                                       checkpoint_interval=200):
     """
     Train the model with enhanced weight space tracking and jump analysis
 
@@ -66,7 +66,7 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
         jump_detection_window=100,
         snapshot_freq=analyze_interval,
         sliding_window_size=10,  # Keep track of 10 recent states for better pre-jump analysis
-        dense_sampling=True,     # Sample more frequently for the sliding window
+        dense_sampling=True,  # Sample more frequently for the sliding window
         jump_threshold=jump_detection_threshold
     )
 
@@ -121,24 +121,24 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
         #     ((epoch - 1) % analyze_interval == 0) or
         #     ((epoch + 1) % analyze_interval == 0)
         # )
-        # More aggressive sampling around potential transition points
-        # force_snapshot = (
-        #         epoch > min_epoch_for_detection and (
-        #         epoch % analyze_interval == 0 or  # Regular interval
-        #         (epoch - 1) % analyze_interval == 0 or  # Just before
-        #         (epoch + 1) % analyze_interval == 0 or  # Just after
-        #         (epoch - 2) % analyze_interval == 0 or  # Two before
-        #         (epoch + 2) % analyze_interval == 0  # Two after
-        # ))
-
-        # Increase sampling rate when we notice larger weight changes
-        if epoch >= min_epoch_for_detection and 'weight_velocity' in model.logger.logs:
-            recent_velocities = model.logger.logs['weight_velocity'][-5:]
-            avg_velocity = sum(recent_velocities) / len(recent_velocities)
-            current_velocity = model.logger.logs['weight_velocity'][-1]
-
-            # If current velocity is significantly higher than recent average
-            force_snapshot = force_snapshot or (current_velocity > 1.5 * avg_velocity)
+        # info more aggressive sampling around potential transition points
+        force_snapshot = (
+                epoch > min_epoch_for_detection and (
+                epoch % analyze_interval == 0 or  # Regular interval
+                (epoch - 1) % analyze_interval == 0 or  # Just before
+                (epoch + 1) % analyze_interval == 0 or  # Just after
+                (epoch - 2) % analyze_interval == 0 or  # Two before
+                (epoch + 2) % analyze_interval == 0  # Two after
+        ))
+        # info sampling based on actual velocity values
+        # info increase sampling rate when we notice larger weight changes
+        # if epoch >= 2 and 'weight_velocity' in model.logger.logs:
+        #     recent_velocities = model.logger.logs['weight_velocity'][-5:]
+        #     avg_velocity = sum(recent_velocities) / len(recent_velocities)
+        #     current_velocity = model.logger.logs['weight_velocity'][-1]
+        #
+        # info if current velocity is significantly higher than recent average
+        #     force_snapshot = force_snapshot or (current_velocity > 1.5 * avg_velocity)
 
         # info return true if snapshot was taken for this epoch
         took_snapshot = weight_tracker.take_snapshot(epoch=epoch, force=force_snapshot)
@@ -164,7 +164,9 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
             print(f"Epoch {epoch:5d}: Train Loss={train_loss:.3g}, Train Acc={train_accuracy:.4f}, "
                   f"Val Loss={eval_loss:.5g}, Val Acc={eval_accuracy:.4f}, Fitting_score={fitting_score:.4f}")
 
-            # Track metrics for grokking detection
+        all_grokking_tests = False
+        if all_grokking_tests:
+            # info track metrics for grokking detection
             track_metrics_for_grokking(epoch=epoch, model=model, train_loader=train_loader, eval_loader=eval_loader)
 
         # info check for pending jumps that need analysis
@@ -178,11 +180,11 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
 
             # info analyze pending jumps with balanced before/after snapshots
             jump_results = weight_tracker.analyze_pending_jumps(
-                    inputs=sample_inputs,
-                    targets=sample_targets,
-                    criterion=criterion,
-                    jump_analyzer=jump_analyzer
-                )
+                inputs=sample_inputs,
+                targets=sample_targets,
+                criterion=criterion,
+                jump_analyzer=jump_analyzer
+            )
             # info process results
             for result in jump_results:
                 jump_epoch = result['jump_epoch']
@@ -489,4 +491,3 @@ def analyze_model_at_jump(model, checkpoint_path, jump_epoch, eval_loader, crite
     }
 
     return results
-

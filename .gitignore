@@ -162,18 +162,17 @@ cython_debug/
 #.idea/
 
 # grokfast_with_igor project
-./assets/
-./results/
-./stats/
-./gists/
 # some single files not to add
-analysis_gist.py
+backup/analysis_gist.py
 updated_analysis_gist.py
-analysis_old.py
 analyze.py
-chekpoint_manager_new.py
 grok.py
 grok_notebook.ipynb
 grokfast.py
 try.ipynb
 
+/gists/
+/backup/
+/results/
+/stats/
+/assets/

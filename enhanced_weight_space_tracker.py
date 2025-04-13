@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -61,22 +63,58 @@ class EnhancedWeightSpaceTracker:
 
     def take_snapshot(self, epoch, force=False):
         """Take a snapshot of the current model weights with improved jump detection"""
-        # Always flatten weights for potential sliding window storage
+        # info always flatten weights for potential sliding window storage
         flattened = []
         for name, param in self.model.named_parameters():
-            if 'weight' in name:  # Only consider weight matrices, not biases
+            if 'weight' in name:  # info anly consider weight matrices, not biases
                 flattened.append(param.detach().cpu().view(-1))
 
         flattened_vector = torch.cat(flattened).numpy()
+        # info get the current dictionary for better and more in-depth analysis
+        current_state_dict = {k: v.detach().cpu() for k, v in self.model.state_dict().items()}
 
-        # info heck if we should add this to the sliding window (more frequent than main snapshots)
+        # info now check for group velocities, not only the whole model
+        # todo is it possible to visualize all using the same pca plot?
+        group_velocities = self.track_parameter_group_velocities(epoch, current_state_dict)
+        if group_velocities and self.logger:
+            # info log the group velocities
+            for group, velocity in group_velocities['group_velocities'].items():
+                self.logger.log_data('weight_velocities', f'{group}_velocity', velocity)
+
+            # info log particularly interesting head velocities if significant
+            if 'head_velocities' in group_velocities:
+                top_head_velocities = sorted(
+                    group_velocities['head_velocities'].items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:5]  # Top 5 changing heads
+
+                for head, velocity in top_head_velocities:
+                    if velocity > 0.1:  # Only log if change is significant
+                        self.logger.log_data('weight_velocities', f'{head}_velocity', velocity)
+
+        # info track spectral properties on regular snapshot intervals
+        if epoch % self.snapshot_freq == 0 or force:
+            spectral_stats = self.track_spectral_properties(epoch, current_state_dict)
+            if spectral_stats and self.logger:
+                # Log key spectral properties
+                for component, stats in spectral_stats.items():
+                    self.logger.log_data('spectral_properties',
+                                         f'{component}_condition',
+                                         stats['condition_number'])
+                    self.logger.log_data('spectral_properties',
+                                         f'{component}_rank',
+                                         stats['effective_rank'])
+
+        ###############################################################################################################
+        # info check if we should add this to the sliding window (more frequent than main snapshots)
         #  either we're doing dense sampling or this is a regular snapshot point
         should_add_to_window = self.dense_sampling or epoch % self.snapshot_freq == 0
 
         if should_add_to_window:
-            # Store state in sliding window
-            state_dict = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
-            self.recent_snapshots.append((epoch, state_dict, flattened_vector))
+            # info store state in sliding window
+            # state_dict = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+            self.recent_snapshots.append((epoch, current_state_dict, flattened_vector))
 
             # info maintain window size
             while len(self.recent_snapshots) > self.sliding_window_size:
@@ -112,11 +150,11 @@ class EnhancedWeightSpaceTracker:
 
                 # info if a jump is detected, queue it for analysis with pre-jump state
                 if jump_detected:
-                    # Find the most recent pre-jump snapshot from sliding window
+                    # info find the most recent pre-jump snapshot from sliding window
                     pre_jump_snapshot = self._find_pre_jump_snapshot(epoch)
                     if pre_jump_snapshot:
                         pre_jump_epoch, pre_jump_state, pre_jump_vector = pre_jump_snapshot
-                        # info store this explicitly as a "pre-jump" snapshot
+                        # info store this explicitly for later analysis
                         self.pending_jumps.append({
                             'jump_epoch': epoch,
                             'pre_jump_epoch': pre_jump_epoch,
@@ -163,17 +201,18 @@ class EnhancedWeightSpaceTracker:
 
         results = []
 
+        # info get epoch numbers for epochs in jump window
         for pending_jump in self.pending_jumps:
             jump_epoch = pending_jump['jump_epoch']
             pre_jump_epoch = pending_jump['pre_jump_epoch']
             pre_jump_state = pending_jump['pre_jump_state']
 
-            # Find the jump snapshot
+            # info find the jump snapshot
             jump_snapshot = None
             for snapshot in self.weight_snapshots:
                 if snapshot['epoch'] == jump_epoch:
                     jump_snapshot = snapshot
-                    break
+                    break##
 
             if jump_snapshot is None:
                 print(f"Warning: Jump snapshot for epoch {jump_epoch} not found")
@@ -186,25 +225,67 @@ class EnhancedWeightSpaceTracker:
                     post_jump_snapshot = snapshot
                     break
 
-            # If no post-jump snapshot exists, create a simulated one at jump_epoch + 0.1
+            # info if no post-jump snapshot exists, create a simulated one at jump_epoch + 0.1
+            # todo simulate the next snapshot by learning from a small sample?
             if post_jump_snapshot is None:
-                # Use current model state for post-jump (will be saved as jump_epoch + 0.1)
+                # info use current model state for post-jump (will be saved as jump_epoch + 0.1)
                 post_jump_snapshot = {
                     'epoch': jump_epoch + 0.1,
                     'state_dict': {k: v.detach().cpu() for k, v in self.model.state_dict().items()}
                 }
 
-            # Create a "pre-jump" snapshot explicitly
+            # info create a "pre-jump" snapshot explicitly
             pre_jump_snapshot = {
                 'epoch': pre_jump_epoch,
                 'state_dict': pre_jump_state
             }
+            # info perform detailed jump characterization
+            jump_char = self.characterize_jump(
+                jump_epoch,
+                pre_jump_snapshot,
+                jump_snapshot,
+                post_jump_snapshot
+            )
 
-            # Now we have balanced pre_jump, jump, and post_jump snapshots
+            # info log the key metrics
+            if self.logger:
+                self.logger.log_data('jump_analysis', f'jump_{jump_epoch}_total_magnitude',
+                                     jump_char['total_magnitude']['pre_to_jump'])
+                self.logger.log_data('jump_analysis', f'jump_{jump_epoch}_symmetry_ratio',
+                                     jump_char['total_magnitude']['symmetry_ratio'])
+
+                # info log top changing components
+                for component_type, changes in jump_char['top_changing_components'].items():
+                    if changes:  # info if there are any changes for this component
+                        top_param, top_change = changes[0]  # Get the most changed parameter
+                        self.logger.log_data('jump_analysis',
+                                             f'jump_{jump_epoch}_{component_type}_top_change',
+                                             top_change['pre_to_jump'])
+
+                # info log top changing layers and heads
+                for layer in jump_char['top_layers']:
+                    self.logger.log_data('jump_analysis',
+                                         f'jump_{jump_epoch}_top_layer_{layer}',
+                                         jump_char['layer_changes'][layer]['pre_to_jump'])
+
+                for head in jump_char['top_heads']:
+                    self.logger.log_data('jump_analysis',
+                                         f'jump_{jump_epoch}_top_head_{head}',
+                                         jump_char['head_changes'][head]['pre_to_jump'])
+
+            print(f"Jump at {jump_epoch} characterized:")
+            print(f"  - Pre-jump epoch: {pre_jump_epoch}")
+            print(f"  - Post-jump epoch: {post_jump_snapshot['epoch']}")
+            print(f"  - Total change magnitude: {jump_char['total_magnitude']['pre_to_jump']:.4f}")
+            print(f"  - Top changing layers: {', '.join(jump_char['top_layers'])}")
+            print(f"  - Top changing heads: {', '.join(jump_char['top_heads'])}")
+
+            ########################################################################################################
+            # info now we have balanced pre_jump, jump, and post_jump snapshots
             print(f"Analyzing jump at {jump_epoch} with pre={pre_jump_epoch}, post={post_jump_snapshot['epoch']}")
 
-            # Perform the analysis with these snapshots
-            result = jump_analyzer.analyze_jump_with_snapshots(
+            # info analysis with these snapshots
+            analyzer_result = jump_analyzer.analyze_jump_with_snapshots(
                 jump_epoch=jump_epoch,
                 pre_jump_snapshot=pre_jump_snapshot,
                 jump_snapshot=jump_snapshot,
@@ -214,13 +295,199 @@ class EnhancedWeightSpaceTracker:
                 criterion=criterion
             )
 
-            results.append(result)
+            # info combine all the results
+            combined_result = {
+                'jump_epoch': jump_epoch,
+                'analyzer_result': analyzer_result,
+                'characterization': jump_char
+            }
 
-        # Clear pending jumps after analysis
+            results.append(combined_result)
+
+        # info clear pending jumps after analysis
         self.pending_jumps = []
 
         return results
 
+    def characterize_jump(self, jump_epoch, pre_jump_snapshot, jump_snapshot, post_jump_snapshot):
+        """
+        Extract detailed characteristics of a jump to identify which components
+        are changing most significantly.
+        """
+        pre_state = pre_jump_snapshot['state_dict']
+        jump_state = jump_snapshot['state_dict']
+        post_state = post_jump_snapshot['state_dict']
+
+        # info calculate component-specific changes
+        component_changes = defaultdict(dict)
+
+        # info track overall changes
+        total_pre_to_jump = 0
+        total_jump_to_post = 0
+
+        # info analyze layer and head-specific changes
+        layer_changes = defaultdict(lambda: {'pre_to_jump': 0, 'jump_to_post': 0})
+        head_changes = defaultdict(lambda: {'pre_to_jump': 0, 'jump_to_post': 0})
+
+        # info compute detailed change metrics
+        for name, jump_param in jump_state.items():
+            if name not in pre_state or name not in post_state:
+                continue
+
+            pre_param = pre_state[name]
+            post_param = post_state[name]
+
+            # info compute changes
+            pre_to_jump_change = torch.norm(jump_param - pre_param).item()
+            jump_to_post_change = torch.norm(post_param - jump_param).item()
+
+            # info track total change
+            total_pre_to_jump += pre_to_jump_change
+            total_jump_to_post += jump_to_post_change
+
+            # info categorize by component type
+            component_type = 'other'
+            if 'attn' in name and 'in_proj' in name:
+                component_type = 'attention_qkv'
+            elif 'attn' in name and 'out_proj' in name:
+                component_type = 'attention_output'
+            elif 'mlp.0' in name or 'mlp.up_proj' in name:
+                component_type = 'mlp_up'
+            elif 'mlp.2' in name or 'mlp.down_proj' in name:
+                component_type = 'mlp_down'
+            elif 'ln' in name or 'norm' in name:
+                component_type = 'layernorm'
+            elif 'embed' in name:
+                component_type = 'embedding'
+
+            component_changes[component_type][name] = {
+                'pre_to_jump': pre_to_jump_change,
+                'jump_to_post': jump_to_post_change,
+                'relative_change': pre_to_jump_change / (torch.norm(pre_param).item() + 1e-8)
+            }
+
+            # info extract layer and head info if possible
+            if 'layers.' in name:
+                parts = name.split('.')
+                try:
+                    layer_idx = int(parts[1])
+                    layer_key = f'layer_{layer_idx}'
+
+                    layer_changes[layer_key]['pre_to_jump'] += pre_to_jump_change
+                    layer_changes[layer_key]['jump_to_post'] += jump_to_post_change
+
+                    # info check for head-specific parameters
+                    if 'attn' in name and hasattr(self.model, 'dim') and hasattr(self.model, 'num_heads'):
+                        head_dim = self.model.dim // self.model.num_heads
+
+                        # info handle input projection (QKV)
+                        if 'in_proj_weight' in name:
+                            dim = self.model.dim
+                            for h in range(self.model.num_heads):
+                                start = h * head_dim
+                                end = (h + 1) * head_dim
+
+                                # info extract head-specific weights for Q, K, V
+                                q_pre = pre_param[:dim][start:end]
+                                q_jump = jump_param[:dim][start:end]
+                                q_post = post_param[:dim][start:end]
+
+                                k_pre = pre_param[dim:2 * dim][start:end]
+                                k_jump = jump_param[dim:2 * dim][start:end]
+                                k_post = post_param[dim:2 * dim][start:end]
+
+                                v_pre = pre_param[2 * dim:][start:end]
+                                v_jump = jump_param[2 * dim:][start:end]
+                                v_post = post_param[2 * dim:][start:end]
+
+                                # info compute head-specific changes
+                                head_key = f'layer_{layer_idx}_head_{h}'
+                                head_changes[head_key]['pre_to_jump'] += (
+                                        torch.norm(q_jump - q_pre).item() +
+                                        torch.norm(k_jump - k_pre).item() +
+                                        torch.norm(v_jump - v_pre).item()
+                                )
+                                head_changes[head_key]['jump_to_post'] += (
+                                        torch.norm(q_post - q_jump).item() +
+                                        torch.norm(k_post - k_jump).item() +
+                                        torch.norm(v_post - v_jump).item()
+                                )
+
+                        # info handle output projection
+                        elif 'out_proj.weight' in name:
+                            for h in range(self.model.num_heads):
+                                start = h * head_dim
+                                end = (h + 1) * head_dim
+
+                                head_key = f'layer_{layer_idx}_head_{h}'
+                                head_changes[head_key]['pre_to_jump'] += torch.norm(
+                                    jump_param[:, start:end] - pre_param[:, start:end]
+                                ).item()
+                                head_changes[head_key]['jump_to_post'] += torch.norm(
+                                    post_param[:, start:end] - jump_param[:, start:end]
+                                ).item()
+                except:
+                    pass
+
+        # info normalize layer and head changes to highlight relative importance
+        #  this helps identify which layers/heads are changing most significantly
+        if layer_changes:
+            max_layer_change = max(item['pre_to_jump'] for item in layer_changes.values())
+            for layer, changes in layer_changes.items():
+                changes['normalized_change'] = changes['pre_to_jump'] / (max_layer_change + 1e-8)
+
+        if head_changes:
+            max_head_change = max(item['pre_to_jump'] for item in head_changes.values())
+            for head, changes in head_changes.items():
+                changes['normalized_change'] = changes['pre_to_jump'] / (max_head_change + 1e-8)
+
+        # info find top changing components by category
+        top_changing = {}
+        for component_type, params in component_changes.items():
+            sorted_params = sorted(params.items(), key=lambda x: x[1]['pre_to_jump'], reverse=True)
+            top_changing[component_type] = sorted_params[:min(5, len(sorted_params))]
+
+        # info get a ranked list of most-changed layers and heads
+        sorted_layers = sorted(layer_changes.items(),
+                               key=lambda x: x[1]['pre_to_jump'],
+                               reverse=True)
+        sorted_heads = sorted(head_changes.items(),
+                              key=lambda x: x[1]['pre_to_jump'],
+                              reverse=True)
+
+        # info calculate spectral changes across the jump
+        pre_spectral = self.track_spectral_properties(jump_epoch - 1, pre_state)
+        jump_spectral = self.track_spectral_properties(jump_epoch, jump_state)
+
+        # info build comprehensive jump characterization
+        characterization = {
+            'jump_epoch': jump_epoch,
+            'pre_epoch': pre_jump_snapshot['epoch'],
+            'post_epoch': post_jump_snapshot['epoch'],
+            'total_magnitude': {
+                'pre_to_jump': total_pre_to_jump,
+                'jump_to_post': total_jump_to_post,
+                # Whether changes are symmetric or biased before/after jump
+                'symmetry_ratio': total_pre_to_jump / (total_jump_to_post + 1e-8)
+            },
+            'component_changes': {k: v for k, v in component_changes.items()},
+            'top_changing_components': top_changing,
+            'layer_changes': dict(sorted_layers),
+            'head_changes': dict(sorted_heads),
+            'top_layers': [l[0] for l in sorted_layers[:3]],
+            'top_heads': [h[0] for h in sorted_heads[:3]],
+            'spectral_changes': {
+                component: {
+                    'condition_number_change': jump_spectral.get(component, {}).get('condition_number', 0) -
+                                               pre_spectral.get(component, {}).get('condition_number', 0),
+                    'effective_rank_change': jump_spectral.get(component, {}).get('effective_rank', 0) -
+                                             pre_spectral.get(component, {}).get('effective_rank', 0)
+                }
+                for component in jump_spectral if component in pre_spectral
+            }
+        }
+
+        return characterization
 
     def _check_for_jumps(self, epoch, current_velocity_norm):
         """Check if a jump has occurred based on velocity patterns"""
@@ -433,6 +700,161 @@ class EnhancedWeightSpaceTracker:
             # Create layer-specific analysis
             self._visualize_layer_changes(jump_id)
 
+    def visualize_jump_characterization(self, jump_char, save_prefix=None):
+        """Create visualizations of jump characterization"""
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        import pandas as pd
+
+        # info create directory for visualizations
+        viz_dir = self.save_dir / "jump_characterization"
+        viz_dir.mkdir(exist_ok=True, parents=True)
+
+        # info file name prefix (based on jump epoch)
+        prefix = save_prefix or f"jump_{jump_char['jump_epoch']}"
+
+        # info 1. component Change Visualization
+        fig1, ax1 = plt.subplots(figsize=(12, 6))
+
+        # info extract component-level changes
+        component_data = []
+        for component, value in jump_char['total_magnitude'].items():
+            if component != 'symmetry_ratio':  # info skip derived metrics
+                component_data.append({
+                    'Component': 'Total',
+                    'Change Type': component,
+                    'Magnitude': value
+                })
+
+        # info add component-type level changes
+        for component_type, params in jump_char['component_changes'].items():
+            if params:  # If there are changes for this component
+                # info sum up changes for this component type
+                pre_to_jump = sum(v['pre_to_jump'] for v in params.values())
+                jump_to_post = sum(v['jump_to_post'] for v in params.values())
+
+                component_data.append({
+                    'Component': component_type,
+                    'Change Type': 'pre_to_jump',
+                    'Magnitude': pre_to_jump
+                })
+                component_data.append({
+                    'Component': component_type,
+                    'Change Type': 'jump_to_post',
+                    'Magnitude': jump_to_post
+                })
+
+        df = pd.DataFrame(component_data)
+
+        # info create grouped bar chart
+        sns.barplot(x='Component', y='Magnitude', hue='Change Type', data=df, ax=ax1)
+        ax1.set_title(f'Component Changes at Jump Epoch {jump_char["jump_epoch"]}')
+        ax1.set_ylabel('Change Magnitude')
+        ax1.set_xticklabels(ax1.get_xticklabels(), rotation=45, ha='right')
+
+        plt.tight_layout()
+        plt.savefig(viz_dir / f"{prefix}_component_changes.png")
+        plt.close(fig1)
+
+        # info 2. Layer and Head Change Visualization
+        fig2, (ax2, ax3) = plt.subplots(1, 2, figsize=(15, 6))
+
+        # info extract layer-level changes
+        layer_data = []
+        for layer, changes in jump_char['layer_changes'].items():
+            layer_data.append({
+                'Layer': layer,
+                'Change Type': 'pre_to_jump',
+                'Magnitude': changes['pre_to_jump'],
+                'Normalized': changes.get('normalized_change', 0)
+            })
+            layer_data.append({
+                'Layer': layer,
+                'Change Type': 'jump_to_post',
+                'Magnitude': changes['jump_to_post']
+            })
+
+        # info convert to DataFrame and sort by pre_to_jump magnitude
+        layer_df = pd.DataFrame(layer_data)
+        layer_df = layer_df.sort_values(by=['Change Type', 'Magnitude'], ascending=[True, False])
+
+        # info only show top 8 layers for clarity
+        top_layers = layer_df[layer_df['Change Type'] == 'pre_to_jump'].head(8)['Layer'].unique()
+        layer_df_filtered = layer_df[layer_df['Layer'].isin(top_layers)]
+
+        # info create layer bar chart
+        sns.barplot(x='Layer', y='Magnitude', hue='Change Type', data=layer_df_filtered, ax=ax2)
+        ax2.set_title(f'Layer Changes at Jump Epoch {jump_char["jump_epoch"]} {self.model.plot_prefix}')
+        ax2.set_ylabel('Change Magnitude')
+        ax2.set_xticklabels(ax2.get_xticklabels(), rotation=45, ha='right')
+
+        # info extract head-level changes
+        head_data = []
+        for head, changes in jump_char['head_changes'].items():
+            head_data.append({
+                'Head': head,
+                'Change Type': 'pre_to_jump',
+                'Magnitude': changes['pre_to_jump'],
+                'Normalized': changes.get('normalized_change', 0)
+            })
+            head_data.append({
+                'Head': head,
+                'Change Type': 'jump_to_post',
+                'Magnitude': changes['jump_to_post']
+            })
+
+        # info convert to DataFrame and sort by pre_to_jump magnitude
+        head_df = pd.DataFrame(head_data)
+        head_df = head_df.sort_values(by=['Change Type', 'Magnitude'], ascending=[True, False])
+
+        # info only show top 8 heads for clarity
+        top_heads = head_df[head_df['Change Type'] == 'pre_to_jump'].head(8)['Head'].unique()
+        head_df_filtered = head_df[head_df['Head'].isin(top_heads)]
+
+        # info create head bar chart
+        sns.barplot(x='Head', y='Magnitude', hue='Change Type', data=head_df_filtered, ax=ax3)
+        ax3.set_title(f'Head Changes at Jump Epoch {jump_char["jump_epoch"]} {self.model.plot_prefix}')
+        ax3.set_ylabel('Change Magnitude')
+        ax3.set_xticklabels(ax3.get_xticklabels(), rotation=45, ha='right')
+
+        plt.tight_layout()
+        plt.savefig(viz_dir / f"{prefix}_layer_head_changes.png")
+        plt.close(fig2)
+
+        # info 3. Spectral Change Visualization (if available)
+        if 'spectral_changes' in jump_char and jump_char['spectral_changes']:
+            fig3, ax4 = plt.subplots(figsize=(12, 6))
+
+            # info extract spectral changes
+            spectral_data = []
+            for component, changes in jump_char['spectral_changes'].items():
+                for metric, value in changes.items():
+                    spectral_data.append({
+                        'Component': component,
+                        'Metric': metric,
+                        'Change': value
+                    })
+
+            # info convert to DataFrame
+            spectral_df = pd.DataFrame(spectral_data)
+
+            # info filter to include only significant changes
+            spectral_df = spectral_df[abs(spectral_df['Change']) > 0.01]
+
+            if not spectral_df.empty:
+                # info create spectral change bar chart
+                sns.barplot(x='Component', y='Change', hue='Metric', data=spectral_df, ax=ax4)
+                ax4.set_title(f'Spectral Changes at Jump Epoch {jump_char["jump_epoch"]} {self.model.plot_prefix}')
+                ax4.set_ylabel('Change Value')
+                ax4.set_xticklabels(ax4.get_xticklabels(), rotation=45, ha='right')
+
+                plt.tight_layout()
+                plt.savefig(viz_dir / f"{prefix}_spectral_changes.png")
+
+            plt.close(fig3)
+
+        return viz_dir
+
     def _visualize_layer_changes(self, jump_id):
         """Visualize changes in each layer across the jump"""
         analysis = self.jump_analysis[jump_id]
@@ -489,6 +911,193 @@ class EnhancedWeightSpaceTracker:
             self.pca = PCA(n_components=n_components)
             self.pca.fit(weight_matrix)
             self.pca_fitted = True
+
+    def track_parameter_group_velocities(self, epoch, current_state_dict):
+        """
+        Track velocities for different parameter groups to identify which
+        components are changing most rapidly.
+        """
+        if not hasattr(self, 'prev_state_dict') or self.prev_state_dict is None:
+            self.prev_state_dict = {k: v.clone().detach() for k, v in current_state_dict.items()}
+            self.group_velocities_history = defaultdict(list)
+            return None
+
+        # Define parameter groups
+        groups = {
+            'attention_query': [],
+            'attention_key': [],
+            'attention_value': [],
+            'attention_output': [],
+            'mlp_up': [],
+            'mlp_down': [],
+            'layernorm': [],
+            'embedding': []
+        }
+
+        # Track per-head and per-layer metrics
+        head_velocities = defaultdict(list)
+        layer_velocities = defaultdict(list)
+
+        # Calculate velocities by group
+        for name, param in current_state_dict.items():
+            if name not in self.prev_state_dict:
+                continue
+
+            # Calculate velocity norm
+            velocity = param - self.prev_state_dict[name]
+            velocity_norm = torch.norm(velocity).item()
+
+            # Get layer index if applicable
+            layer_idx = None
+            if 'layers.' in name:
+                parts = name.split('.')
+                try:
+                    layer_idx = int(parts[1])
+                    layer_velocities[f'layer_{layer_idx}'].append(velocity_norm)
+                except:
+                    pass
+
+            # Categorize by parameter type
+            if 'attn' in name and 'in_proj' in name:
+                # Split query/key/value based on dimension
+                if hasattr(self.model, 'dim') and hasattr(self.model, 'num_heads'):
+                    dim = self.model.dim
+                    # Standard MultiheadAttention implementation has QKV stacked
+                    if 'weight' in name:
+                        q_weights = velocity[:dim]
+                        k_weights = velocity[dim:2 * dim]
+                        v_weights = velocity[2 * dim:]
+
+                        groups['attention_query'].append(torch.norm(q_weights).item())
+                        groups['attention_key'].append(torch.norm(k_weights).item())
+                        groups['attention_value'].append(torch.norm(v_weights).item())
+
+                        # Track per-head velocities if possible
+                        head_dim = dim // self.model.num_heads
+                        for h in range(self.model.num_heads):
+                            start = h * head_dim
+                            end = (h + 1) * head_dim
+                            if layer_idx is not None:
+                                head_velocities[f'layer_{layer_idx}_head_{h}_q'].append(
+                                    torch.norm(q_weights[start:end]).item())
+                                head_velocities[f'layer_{layer_idx}_head_{h}_k'].append(
+                                    torch.norm(k_weights[start:end]).item())
+                                head_velocities[f'layer_{layer_idx}_head_{h}_v'].append(
+                                    torch.norm(v_weights[start:end]).item())
+                else:
+                    groups['attention_query'].append(velocity_norm)
+            elif 'attn' in name and 'out_proj' in name:
+                groups['attention_output'].append(velocity_norm)
+
+                # Track per-head output velocities
+                if 'weight' in name and hasattr(self.model, 'dim') and hasattr(self.model, 'num_heads'):
+                    head_dim = self.model.dim // self.model.num_heads
+                    for h in range(self.model.num_heads):
+                        start = h * head_dim
+                        end = (h + 1) * head_dim
+                        if layer_idx is not None:
+                            head_velocity = torch.norm(velocity[:, start:end]).item()
+                            head_velocities[f'layer_{layer_idx}_head_{h}_out'].append(head_velocity)
+            elif 'mlp.0' in name or 'mlp.up_proj' in name:
+                groups['mlp_up'].append(velocity_norm)
+            elif 'mlp.2' in name or 'mlp.down_proj' in name:
+                groups['mlp_down'].append(velocity_norm)
+            elif 'ln' in name or 'norm' in name:
+                groups['layernorm'].append(velocity_norm)
+            elif 'embed' in name:
+                groups['embedding'].append(velocity_norm)
+
+        # Calculate average velocity for each group
+        group_velocities = {k: np.mean(v) if v else 0.0 for k, v in groups.items()}
+        layer_group_velocities = {k: np.mean(v) if v else 0.0 for k, v in layer_velocities.items()}
+        head_group_velocities = {k: np.mean(v) if v else 0.0 for k, v in head_velocities.items()}
+
+        # Store history
+        for k, v in group_velocities.items():
+            self.group_velocities_history[k].append((epoch, v))
+        for k, v in layer_group_velocities.items():
+            self.group_velocities_history[k].append((epoch, v))
+        for k, v in head_group_velocities.items():
+            self.group_velocities_history[k].append((epoch, v))
+
+        # Update previous state
+        self.prev_state_dict = {k: v.clone().detach() for k, v in current_state_dict.items()}
+
+        return {
+            'group_velocities': group_velocities,
+            'layer_velocities': layer_group_velocities,
+            'head_velocities': head_group_velocities
+        }
+
+    def track_spectral_properties(self, epoch, current_state_dict):
+        """
+        Track spectral properties (singular values) of weight matrices to understand
+        how the representation space is evolving.
+        """
+        spectral_stats = {}
+
+        # Track layer-wise stats
+        for layer_idx in range(self.model.num_layers):
+            # Attention weights
+            for component in ['in_proj_weight', 'out_proj.weight']:
+                key = f'layers.{layer_idx}.attn.{component}'
+                if key in current_state_dict:
+                    matrix = current_state_dict[key].detach().cpu().numpy()
+
+                    # Special handling for in_proj_weight (QKV stacked)
+                    if 'in_proj_weight' in key and hasattr(self.model, 'dim'):
+                        dim = self.model.dim
+                        q_weights = matrix[:dim]
+                        k_weights = matrix[dim:2 * dim]
+                        v_weights = matrix[2 * dim:]
+
+                        # Analyze each component separately
+                        for name, weights in [('query', q_weights), ('key', k_weights), ('value', v_weights)]:
+                            try:
+                                u, s, vh = np.linalg.svd(weights, full_matrices=False)
+                                spectral_stats[f'layer_{layer_idx}_attn_{name}'] = {
+                                    'singular_values': s,
+                                    'condition_number': s[0] / (s[-1] + 1e-8),
+                                    'effective_rank': np.sum(s) / (s[0] + 1e-8)
+                                }
+                            except:
+                                pass
+                    else:
+                        try:
+                            u, s, vh = np.linalg.svd(matrix, full_matrices=False)
+                            spectral_stats[f'layer_{layer_idx}_attn_output'] = {
+                                'singular_values': s,
+                                'condition_number': s[0] / (s[-1] + 1e-8),
+                                'effective_rank': np.sum(s) / (s[0] + 1e-8)
+                            }
+                        except:
+                            pass
+
+            # MLP weights
+            for idx, component in [(0, 'up'), (2, 'down')]:
+                key = f'layers.{layer_idx}.mlp.{idx}.weight'
+                if key in current_state_dict:
+                    matrix = current_state_dict[key].detach().cpu().numpy()
+                    try:
+                        u, s, vh = np.linalg.svd(matrix, full_matrices=False)
+                        spectral_stats[f'layer_{layer_idx}_mlp_{component}'] = {
+                            'singular_values': s,
+                            'condition_number': s[0] / (s[-1] + 1e-8),
+                            'effective_rank': np.sum(s) / (s[0] + 1e-8)
+                        }
+                    except:
+                        pass
+
+        # Store history if not already tracking
+        if not hasattr(self, 'spectral_history'):
+            self.spectral_history = defaultdict(list)
+
+        # Track key metrics over time
+        for component, stats in spectral_stats.items():
+            self.spectral_history[f'{component}_condition'].append((epoch, stats['condition_number']))
+            self.spectral_history[f'{component}_rank'].append((epoch, stats['effective_rank']))
+
+        return spectral_stats
 
     def analyze_trajectory(self):
         """Analyze the trajectory of weights in PCA space"""

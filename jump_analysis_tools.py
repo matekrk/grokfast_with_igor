@@ -963,3 +963,78 @@ class JumpAnalysisTools:
                                  results['landscape_analysis']['jump']['condition_number'])
 
         return results
+
+def analyze_model_at_jump(model, checkpoint_path, jump_epoch, eval_loader, criterion, device):
+    """
+    Load a model checkpoint and analyze it at a specific jump point
+
+    Parameters:
+    -----------
+    model : torch.nn.Module
+        The model to analyze
+    checkpoint_path : str or Path
+        Path to the checkpoint directory
+    jump_epoch : int
+        The epoch of the jump to analyze
+    eval_loader : DataLoader
+        Evaluation data loader
+    criterion : loss function
+        Loss function
+    device : torch.device
+        Device to run analysis on
+
+    Returns:
+    --------
+    dict
+        Analysis results
+    """
+    # Load the checkpoint
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint_file = checkpoint_path / f"checkpoint_step_{jump_epoch}.pt"
+
+    if not checkpoint_file.exists():
+        print(f"Checkpoint file not found: {checkpoint_file}")
+        return None
+
+    # Load checkpoint
+    checkpoint = torch.load(checkpoint_file)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model = model.to(device)
+
+    # Initialize analysis tools
+    jump_analyzer = JumpAnalysisTools(
+        model=model,
+        save_dir=checkpoint_path / "jump_analysis",
+        logger=model.logger if hasattr(model, "logger") else None
+    )
+
+    # Get a batch of data
+    sample_inputs, sample_targets = next(iter(eval_loader))
+    sample_inputs, sample_targets = sample_inputs.to(device), sample_targets.to(device)
+
+    # Analyze loss landscape
+    landscape_analysis = jump_analyzer.analyze_loss_curvature(
+        inputs=sample_inputs,
+        targets=sample_targets,
+        criterion=criterion
+    )
+
+    # Analyze head attribution
+    attribution_analysis = model.analyze_head_attribution(eval_loader)
+
+    # Analyze attention patterns
+    attention_entropy = model.compute_attention_entropy(eval_loader)
+
+    # Get attention patterns
+    _ = model(sample_inputs, store_attention=True)
+    attention_patterns = model.get_attention_patterns()
+
+    results = {
+        'epoch': jump_epoch,
+        'landscape_analysis': landscape_analysis,
+        'attribution_analysis': attribution_analysis,
+        'attention_entropy': attention_entropy,
+        'attention_patterns': {k: v.cpu().numpy() for k, v in attention_patterns.items()} if attention_patterns else {}
+    }
+
+    return results

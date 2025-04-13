@@ -973,6 +973,706 @@ class AttentionMLPAnalyzer:
 
         return vis_paths
 
+    def analyze_across_jumps(self, weight_tracker, jump_results, num_batches=3):
+        """
+        Analyze attention-MLP relationships across detected jumps.
+
+        Parameters:
+        -----------
+        weight_tracker : EnhancedWeightSpaceTracker
+            The weight tracker containing jump information
+        jump_results : list
+            Results from weight_tracker.analyze_pending_jumps()
+        num_batches : int
+            Number of batches to use for activation collection
+
+        Returns:
+        --------
+        dict : Comparative analysis across jumps
+        """
+        jump_analyses = {}
+
+        for result in jump_results:
+            jump_epoch = result['jump_epoch']
+            jump_char = result['characterization']
+
+            # Store the current model state
+            original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+
+            # Get pre-jump, jump, and post-jump states
+            pre_jump_state = result.get('pre_jump_snapshot', {}).get('state_dict')
+            jump_state = result.get('jump_snapshot', {}).get('state_dict')
+            post_jump_state = result.get('post_jump_snapshot', {}).get('state_dict')
+
+            jump_analyses[jump_epoch] = {}
+
+            try:
+                # Analyze each state
+                for state_name, state in [
+                    ('pre_jump', pre_jump_state),
+                    ('jump', jump_state),
+                    ('post_jump', post_jump_state)
+                ]:
+                    if state is None:
+                        continue
+
+                    # Load this state
+                    self.model.load_state_dict(state)
+
+                    # Focus on top changing layers and heads from characterization
+                    top_layers = [int(layer.split('_')[1]) for layer in jump_char.get('top_layers', [])]
+                    top_heads = []
+                    for head in jump_char.get('top_heads', []):
+                        parts = head.split('_')
+                        if len(parts) >= 4:
+                            layer_idx = int(parts[1])
+                            head_idx = int(parts[3])
+                            top_heads.append((layer_idx, head_idx))
+
+                    # Collect activations
+                    activations = self.collect_activations(num_batches=num_batches)
+
+                    # Analyze activation flow for top layers
+                    flow_analysis = {}
+                    for layer_idx in top_layers:
+                        layer_key = f'layer_{layer_idx}'
+                        if layer_idx in activations.get('attn_outputs', {}) and layer_idx in activations.get(
+                                'mlp_inputs',
+                                {}):
+                            # Get attention outputs and MLP inputs
+                            attn_out = activations['attn_outputs'][layer_idx]
+                            mlp_in = activations['mlp_inputs'][layer_idx]
+
+                            # Reshape for correlation analysis
+                            attn_out_flat = attn_out.reshape(-1, attn_out.size(-1))
+                            mlp_in_flat = mlp_in.reshape(-1, mlp_in.size(-1))
+
+                            # Calculate correlation
+                            corr_matrix = np.corrcoef(
+                                attn_out_flat[:, :100].numpy().T,  # Sample up to 100 dims
+                                mlp_in_flat[:, :100].numpy().T
+                            )
+
+                            # Extract cross-correlation block
+                            cross_corr = corr_matrix[:100, 100:]
+
+                            flow_analysis[layer_key] = {
+                                'mean_correlation': np.mean(np.abs(cross_corr)),
+                                'cross_correlation_matrix': cross_corr
+                            }
+
+                    # Analyze patterns for top heads
+                    pattern_analysis = {}
+                    for layer_idx, head_idx in top_heads:
+                        pattern_key = f'layer_{layer_idx}_head_{head_idx}'
+                        if pattern_key in activations.get('attn_patterns', {}):
+                            patterns = activations['attn_patterns'][pattern_key]
+
+                            # Calculate entropy (lower means more specialized)
+                            entropy = -torch.sum(patterns * torch.log(patterns + 1e-10)).item()
+
+                            # Calculate diagonal strength (focus on token itself)
+                            diag_strength = torch.mean(torch.diag(patterns)).item()
+
+                            pattern_analysis[pattern_key] = {
+                                'entropy': entropy,
+                                'diagonal_strength': diag_strength,
+                                'mean_pattern': patterns.mean(0).numpy()
+                            }
+
+                    # Store results for this state
+                    jump_analyses[jump_epoch][state_name] = {
+                        'flow_analysis': flow_analysis,
+                        'pattern_analysis': pattern_analysis
+                    }
+
+                    # Apply sparse autoencoder to analyze top layer representations
+                    if top_layers and 'mlp' in state_name:  # Only for specific states to save time
+                        primary_layer = top_layers[0]
+                        layer_key = f'layer_{primary_layer}'
+
+                        if primary_layer in activations.get('mlp_outputs', {}):
+                            autoencoder = SparseAutoencoder(
+                                input_dim=self.model.dim,
+                                code_dim=self.model.dim * 2,
+                                l1_coef=0.001
+                            )
+
+                            mlp_out = activations['mlp_outputs'][primary_layer]
+                            mlp_out_flat = mlp_out.reshape(-1, mlp_out.size(-1))
+
+                            # Train autoencoder on this layer's activations
+                            sparse_results = self._train_autoencoder(
+                                autoencoder,
+                                mlp_out_flat,
+                                epochs=50
+                            )
+
+                            jump_analyses[jump_epoch][state_name]['sparse_analysis'] = {
+                                layer_key: sparse_results
+                            }
+            finally:
+                # Restore original model state
+                self.model.load_state_dict(original_state)
+
+            # Calculate changes across states
+            if all(k in jump_analyses[jump_epoch] for k in ['pre_jump', 'jump', 'post_jump']):
+                # Analyze changes in flow correlation
+                for layer_key in top_layers:
+                    layer_key = f'layer_{layer_key}'
+                    pre_corr = jump_analyses[jump_epoch]['pre_jump']['flow_analysis'].get(layer_key, {}).get(
+                        'mean_correlation', 0)
+                    jump_corr = jump_analyses[jump_epoch]['jump']['flow_analysis'].get(layer_key, {}).get(
+                        'mean_correlation', 0)
+                    post_corr = jump_analyses[jump_epoch]['post_jump']['flow_analysis'].get(layer_key, {}).get(
+                        'mean_correlation', 0)
+
+                    jump_analyses[jump_epoch]['correlation_changes'] = {
+                        layer_key: {
+                            'pre_to_jump': jump_corr - pre_corr,
+                            'jump_to_post': post_corr - jump_corr,
+                            'overall': post_corr - pre_corr
+                        }
+                    }
+
+                # Analyze changes in pattern entropy
+                for pattern_key in pattern_analysis:
+                    pre_entropy = jump_analyses[jump_epoch]['pre_jump']['pattern_analysis'].get(pattern_key, {}).get(
+                        'entropy', 0)
+                    jump_entropy = jump_analyses[jump_epoch]['jump']['pattern_analysis'].get(pattern_key, {}).get(
+                        'entropy',
+                        0)
+                    post_entropy = jump_analyses[jump_epoch]['post_jump']['pattern_analysis'].get(pattern_key, {}).get(
+                        'entropy', 0)
+
+                    if 'entropy_changes' not in jump_analyses[jump_epoch]:
+                        jump_analyses[jump_epoch]['entropy_changes'] = {}
+
+                    jump_analyses[jump_epoch]['entropy_changes'][pattern_key] = {
+                        'pre_to_jump': jump_entropy - pre_entropy,
+                        'jump_to_post': post_entropy - jump_entropy,
+                        'overall': post_entropy - pre_entropy
+                    }
+
+        # Create visualizations for these analyses
+        self._visualize_jump_comparisons(jump_analyses)
+
+        return jump_analyses
+
+    def _train_autoencoder(self, autoencoder, activations, epochs=50, batch_size=128):
+        """Helper method to train a sparse autoencoder on activations"""
+        device = next(self.model.parameters()).device
+        autoencoder = autoencoder.to(device)
+
+        # Create dataloader
+        dataset = torch.utils.data.TensorDataset(activations)
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=True
+        )
+
+        # Train
+        optimizer = torch.optim.Adam(autoencoder.parameters(), lr=0.001)
+
+        for epoch in range(epochs):
+            total_loss = 0
+            recon_loss = 0
+            sparse_loss = 0
+
+            for x, in dataloader:
+                x = x.to(device)
+
+                # Forward pass
+                x_recon, codes = autoencoder(x)
+
+                # Losses
+                r_loss = torch.nn.functional.mse_loss(x_recon, x)
+                s_loss = autoencoder.l1_coef * torch.abs(codes).mean()
+                loss = r_loss + s_loss
+
+                # Backward
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+                recon_loss += r_loss.item()
+                sparse_loss += s_loss.item()
+
+        # Analyze the learned features
+        autoencoder.eval()
+        all_codes = []
+
+        with torch.no_grad():
+            for x, in dataloader:
+                x = x.to(device)
+                _, codes = autoencoder(x)
+                all_codes.append(codes.cpu())
+
+        all_codes = torch.cat(all_codes, dim=0)
+
+        # Calculate feature statistics
+        activation_freq = torch.mean((all_codes > 0.1).float(), dim=0).numpy()
+        decoder_weights = autoencoder.decoder.weight.detach().cpu().numpy().T
+
+        return {
+            'activation_frequency': activation_freq,
+            'decoder_weights': decoder_weights,
+            'autoencoder': autoencoder
+        }
+
+    def _visualize_jump_comparisons(self, jump_analyses):
+        """Create visualizations comparing attention-MLP relationships across jumps"""
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
+        viz_dir = self.save_dir / "jump_comparisons"
+        viz_dir.mkdir(exist_ok=True, parents=True)
+
+        for jump_epoch, analysis in jump_analyses.items():
+            # 1. Compare correlation changes
+            if 'correlation_changes' in analysis:
+                fig1, ax1 = plt.subplots(figsize=(10, 6))
+
+                # Extract data for plotting
+                layers = []
+                pre_to_jump = []
+                jump_to_post = []
+                overall = []
+
+                for layer, changes in analysis['correlation_changes'].items():
+                    layers.append(layer)
+                    pre_to_jump.append(changes['pre_to_jump'])
+                    jump_to_post.append(changes['jump_to_post'])
+                    overall.append(changes['overall'])
+
+                # Set up x-positions for grouped bars
+                x = np.arange(len(layers))
+                width = 0.25
+
+                # Plot grouped bars
+                ax1.bar(x - width, pre_to_jump, width, label='Pre→Jump')
+                ax1.bar(x, jump_to_post, width, label='Jump→Post')
+                ax1.bar(x + width, overall, width, label='Overall')
+
+                ax1.set_xlabel('Layer')
+                ax1.set_ylabel('Change in Correlation')
+                ax1.set_title(f'Changes in Attention-MLP Correlation at Jump {jump_epoch}')
+                ax1.set_xticks(x)
+                ax1.set_xticklabels(layers)
+                ax1.legend()
+
+                plt.tight_layout()
+                plt.savefig(viz_dir / f"jump_{jump_epoch}_correlation_changes.png")
+                plt.close(fig1)
+
+            # 2. Compare entropy changes
+            if 'entropy_changes' in analysis:
+                fig2, ax2 = plt.subplots(figsize=(12, 6))
+
+                # Extract data for plotting
+                heads = []
+                pre_to_jump = []
+                jump_to_post = []
+
+                for head, changes in analysis['entropy_changes'].items():
+                    heads.append(head)
+                    pre_to_jump.append(changes['pre_to_jump'])
+                    jump_to_post.append(changes['jump_to_post'])
+
+                # Convert to DataFrame for grouped bar plot
+                import pandas as pd
+                data = []
+                for i, head in enumerate(heads):
+                    data.append({'Head': head, 'Change Type': 'Pre→Jump', 'Entropy Change': pre_to_jump[i]})
+                    data.append({'Head': head, 'Change Type': 'Jump→Post', 'Entropy Change': jump_to_post[i]})
+
+                df = pd.DataFrame(data)
+
+                # Create grouped bar plot
+                sns.barplot(x='Head', y='Entropy Change', hue='Change Type', data=df, ax=ax2)
+
+                ax2.set_title(f'Changes in Attention Head Entropy at Jump {jump_epoch}')
+                ax2.set_xlabel('Attention Head')
+                ax2.set_ylabel('Entropy Change')
+                ax2.set_xticklabels(ax2.get_xticklabels(), rotation=45, ha='right')
+
+                plt.tight_layout()
+                plt.savefig(viz_dir / f"jump_{jump_epoch}_entropy_changes.png")
+                plt.close(fig2)
+
+            # 3. Compare attention patterns across states
+            for state_name in ['pre_jump', 'jump', 'post_jump']:
+                if state_name in analysis and 'pattern_analysis' in analysis[state_name]:
+                    patterns = analysis[state_name]['pattern_analysis']
+
+                    if patterns:
+                        # Create a grid of patterns
+                        n_patterns = len(patterns)
+                        n_cols = min(n_patterns, 4)
+                        n_rows = (n_patterns + n_cols - 1) // n_cols
+
+                        fig3, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3))
+                        axes = axes.flatten() if n_patterns > 1 else [axes]
+
+                        for i, (head_key, pattern_data) in enumerate(patterns.items()):
+                            if i < len(axes):
+                                mean_pattern = pattern_data['mean_pattern']
+                                sns.heatmap(mean_pattern, ax=axes[i], cmap='viridis')
+                                axes[i].set_title(f"{head_key}\nEntropy: {pattern_data['entropy']:.3f}")
+
+                        # Hide unused axes
+                        for i in range(n_patterns, len(axes)):
+                            axes[i].axis('off')
+
+                        plt.tight_layout()
+                        plt.savefig(viz_dir / f"jump_{jump_epoch}_{state_name}_patterns.png")
+                        plt.close(fig3)
+
+            # 4. Feature visualization for sparse analysis
+            for state_name in ['pre_jump', 'jump', 'post_jump']:
+                if state_name in analysis and 'sparse_analysis' in analysis[state_name]:
+                    for layer_key, results in analysis[state_name]['sparse_analysis'].items():
+                        # Visualize feature usage distribution
+                        fig4, ax4 = plt.subplots(figsize=(10, 6))
+
+                        sns.histplot(results['activation_frequency'], bins=30, ax=ax4)
+                        ax4.set_title(f'Feature Usage Distribution - {layer_key} at {state_name}')
+                        ax4.set_xlabel('Activation Frequency')
+                        ax4.set_ylabel('Count')
+
+                        plt.tight_layout()
+                        plt.savefig(viz_dir / f"jump_{jump_epoch}_{state_name}_{layer_key}_feature_dist.png")
+                        plt.close(fig4)
+
+                        # Visualize top features
+                        top_indices = np.argsort(results['activation_frequency'])[-16:]
+                        fig5, axes = plt.subplots(4, 4, figsize=(12, 10))
+                        axes = axes.flatten()
+
+                        for i, feat_idx in enumerate(top_indices):
+                            weights = results['decoder_weights'][feat_idx]
+                            axes[i].bar(range(len(weights)), weights)
+                            axes[i].set_title(
+                                f'Feature {feat_idx}\nFreq: {results["activation_frequency"][feat_idx]:.3f}')
+                            axes[i].set_xticks([])
+
+                        plt.tight_layout()
+                        plt.savefig(viz_dir / f"jump_{jump_epoch}_{state_name}_{layer_key}_top_features.png")
+                        plt.close(fig5)
+
+    def discover_circuits(self, weight_tracker, jump_results, eval_loader, criterion, circuit_threshold=0.1):
+        """
+        Discover circuits that form during jump transitions.
+
+        Parameters:
+        -----------
+        weight_tracker : EnhancedWeightSpaceTracker
+            The weight tracker with jump information
+        jump_results : list
+            Results from weight_tracker.analyze_pending_jumps()
+        eval_loader : DataLoader
+            Evaluation data loader
+        criterion : loss function
+            Loss function for evaluation
+        circuit_threshold : float
+            Threshold for identifying circuit components
+
+        Returns:
+        --------
+        dict : Discovered circuits and their properties
+        """
+        circuit_analysis = {}
+
+        for result in jump_results:
+            jump_epoch = result['jump_epoch']
+            jump_char = result['characterization']
+
+            # Store original model state
+            original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+
+            try:
+                # Get pre-jump, jump, and post-jump states
+                pre_jump_state = result.get('pre_jump_snapshot', {}).get('state_dict')
+                jump_state = result.get('jump_snapshot', {}).get('state_dict')
+                post_jump_state = result.get('post_jump_snapshot', {}).get('state_dict')
+
+                # Focus on top changing components from characterization
+                top_layers = [int(layer.split('_')[1]) for layer in jump_char.get('top_layers', [])]
+                top_heads = []
+                for head in jump_char.get('top_heads', []):
+                    parts = head.split('_')
+                    if len(parts) >= 4:
+                        layer_idx = int(parts[1])
+                        head_idx = int(parts[3])
+                        top_heads.append((layer_idx, head_idx))
+
+                # Identify potential circuit components
+                potential_components = []
+
+                # Add top heads to potential components
+                for layer_idx, head_idx in top_heads:
+                    potential_components.append(('attention', layer_idx, head_idx))
+
+                # Add top MLP layers to potential components
+                for layer_idx in top_layers:
+                    potential_components.append(('mlp', layer_idx, None))
+
+                # Evaluate baseline performance with post-jump state
+                self.model.load_state_dict(post_jump_state)
+                baseline_acc, baseline_loss = self.model.evaluate(eval_loader)
+
+                # Analyze each potential component
+                component_attribution = {}
+
+                for comp_type, layer_idx, head_idx in potential_components:
+                    # Load post-jump state (restored state)
+                    self.model.load_state_dict(post_jump_state)
+
+                    # Mask the component
+                    if comp_type == 'attention' and head_idx is not None:
+                        # Mask specific attention head
+                        head_dim = self.model.dim // self.model.num_heads
+                        start_idx = head_idx * head_dim
+                        end_idx = (head_idx + 1) * head_dim
+
+                        with torch.no_grad():
+                            # Zero out this head's contribution in the output projection
+                            self.model.layers[layer_idx].attn.out_proj.weight[:, start_idx:end_idx] = 0
+
+                    elif comp_type == 'mlp':
+                        # Mask entire MLP
+                        with torch.no_grad():
+                            # Zero out MLP weights
+                            if hasattr(self.model.layers[layer_idx].mlp, '0'):
+                                # Sequential MLP
+                                self.model.layers[layer_idx].mlp[0].weight.fill_(0)
+                                self.model.layers[layer_idx].mlp[2].weight.fill_(0)
+                            else:
+                                # Named MLP
+                                self.model.layers[layer_idx].mlp.up_proj.weight.fill_(0)
+                                self.model.layers[layer_idx].mlp.down_proj.weight.fill_(0)
+
+                    # Evaluate with component masked
+                    ablated_acc, ablated_loss = self.model.evaluate(eval_loader)
+
+                    # Calculate attribution
+                    attribution = baseline_acc - ablated_acc
+
+                    # Store results
+                    component_key = f"{comp_type}_{layer_idx}"
+                    if head_idx is not None:
+                        component_key += f"_head_{head_idx}"
+
+                    component_attribution[component_key] = attribution
+
+                # Identify circuit components based on attribution threshold
+                circuit_components = {k: v for k, v in component_attribution.items()
+                                      if v >= circuit_threshold}
+
+                # Sort by attribution
+                sorted_components = sorted(circuit_components.items(),
+                                           key=lambda x: x[1],
+                                           reverse=True)
+
+                # Analyze pairwise interactions
+                pairwise_interactions = {}
+
+                # Only analyze if we have at least 2 components
+                component_keys = list(circuit_components.keys())
+                if len(component_keys) >= 2:
+                    for i, comp1 in enumerate(component_keys):
+                        for comp2 in component_keys[i + 1:]:
+                            # Load post-jump state
+                            self.model.load_state_dict(post_jump_state)
+
+                            # Parse component keys
+                            comp1_parts = comp1.split('_')
+                            comp2_parts = comp2.split('_')
+
+                            # Mask both components
+                            self._mask_component(self.model, comp1_parts)
+                            self._mask_component(self.model, comp2_parts)
+
+                            # Evaluate with both components masked
+                            pair_ablated_acc, pair_ablated_loss = self.model.evaluate(eval_loader)
+
+                            # Calculate interaction effect
+                            expected_attribution = circuit_components[comp1] + circuit_components[comp2]
+                            actual_attribution = baseline_acc - pair_ablated_acc
+
+                            # Measure super-additive effects (positive indicates circuit-like behavior)
+                            interaction = actual_attribution - expected_attribution
+
+                            pairwise_interactions[f"{comp1}+{comp2}"] = {
+                                'expected_attribution': expected_attribution,
+                                'actual_attribution': actual_attribution,
+                                'interaction': interaction,
+                                'is_circuit': interaction > 0.01  # Positive interaction indicates circuit
+                            }
+
+                # Store circuit analysis
+                circuit_analysis[jump_epoch] = {
+                    'component_attribution': component_attribution,
+                    'circuit_components': circuit_components,
+                    'sorted_components': sorted_components,
+                    'pairwise_interactions': pairwise_interactions
+                }
+
+                # Create circuit visualization
+                self._visualize_circuit_analysis(jump_epoch, circuit_analysis[jump_epoch])
+
+            finally:
+                # Restore original model state
+                self.model.load_state_dict(original_state)
+
+        return circuit_analysis
+
+    def _mask_component(self, model, component_parts):
+        """Helper to mask a specific component based on parsed key"""
+        if 'attention' in component_parts:
+            layer_idx = int(component_parts[component_parts.index('attention') + 1])
+            if 'head' in component_parts:
+                head_idx = int(component_parts[component_parts.index('head') + 1])
+
+                # Mask specific attention head
+                head_dim = model.dim // model.num_heads
+                start_idx = head_idx * head_dim
+                end_idx = (head_idx + 1) * head_dim
+
+                with torch.no_grad():
+                    model.layers[layer_idx].attn.out_proj.weight[:, start_idx:end_idx] = 0
+
+        elif 'mlp' in component_parts:
+            layer_idx = int(component_parts[component_parts.index('mlp') + 1])
+
+            # Mask entire MLP
+            with torch.no_grad():
+                # Zero out MLP weights
+                if hasattr(model.layers[layer_idx].mlp, '0'):
+                    # Sequential MLP
+                    model.layers[layer_idx].mlp[0].weight.fill_(0)
+                    model.layers[layer_idx].mlp[2].weight.fill_(0)
+                else:
+                    # Named MLP
+                    model.layers[layer_idx].mlp.up_proj.weight.fill_(0)
+                    model.layers[layer_idx].mlp.down_proj.weight.fill_(0)
+
+    def _visualize_circuit_analysis(self, jump_epoch, circuit_data):
+        """Create visualizations for circuit analysis"""
+        import matplotlib.pyplot as plt
+        import networkx as nx
+        import seaborn as sns
+
+        viz_dir = self.save_dir / "circuit_analysis"
+        viz_dir.mkdir(exist_ok=True, parents=True)
+
+        # 1. Component Attribution Bar Chart
+        if circuit_data['component_attribution']:
+            components = []
+            attributions = []
+
+            for comp, attr in sorted(circuit_data['component_attribution'].items(),
+                                     key=lambda x: x[1], reverse=True):
+                components.append(comp)
+                attributions.append(attr)
+
+            # Create bar chart
+            plt.figure(figsize=(12, 6))
+            plt.bar(components, attributions)
+            plt.axhline(y=0.01, color='r', linestyle='--', label='Threshold')
+            plt.xlabel('Component')
+            plt.ylabel('Attribution (Accuracy Decrease When Ablated)')
+            plt.title(f'Component Attribution at Jump {jump_epoch}')
+            plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
+            plt.savefig(viz_dir / f"jump_{jump_epoch}_component_attribution.png")
+            plt.close()
+
+        # 2. Circuit Interaction Network Graph
+        if circuit_data['pairwise_interactions']:
+            plt.figure(figsize=(10, 8))
+
+            # Create a graph
+            G = nx.Graph()
+
+            # Add nodes for circuit components
+            for comp in circuit_data['circuit_components']:
+                attr_score = circuit_data['component_attribution'][comp]
+                G.add_node(comp, weight=attr_score)
+
+            # Add edges for interactions
+            for pair, data in circuit_data['pairwise_interactions'].items():
+                comp1, comp2 = pair.split('+')
+
+                if data['is_circuit']:
+                    # Only add edges for positive interactions (circuit-like behavior)
+                    G.add_edge(comp1, comp2, weight=data['interaction'])
+
+            # Set node sizes based on attribution
+            node_sizes = [G.nodes[node]['weight'] * 5000 for node in G.nodes]
+
+            # Set edge widths based on interaction strength
+            edge_widths = [G[u][v]['weight'] * 10 for u, v in G.edges]
+
+            # Position nodes using spring layout
+            pos = nx.spring_layout(G, seed=42)
+
+            # Draw the graph
+            nx.draw_networkx_nodes(G, pos, node_size=node_sizes, alpha=0.8,
+                                   node_color='lightblue')
+            nx.draw_networkx_edges(G, pos, width=edge_widths, alpha=0.5,
+                                   edge_color='gray')
+            nx.draw_networkx_labels(G, pos, font_size=10)
+
+            plt.title(f'Circuit Interaction Network at Jump {jump_epoch}')
+            plt.axis('off')
+            plt.tight_layout()
+            plt.savefig(viz_dir / f"jump_{jump_epoch}_circuit_network.png")
+            plt.close()
+
+        # 3. Heatmap of Pairwise Interactions
+        if circuit_data['pairwise_interactions']:
+            import pandas as pd
+
+            # Extract interaction values
+            pairs = []
+            interactions = []
+
+            for pair, data in circuit_data['pairwise_interactions'].items():
+                comp1, comp2 = pair.split('+')
+                pairs.append(pair)
+                interactions.append(data['interaction'])
+
+            # Create a matrix representation
+            unique_comps = sorted(list(circuit_data['circuit_components'].keys()))
+            n_comps = len(unique_comps)
+
+            if n_comps > 1:
+                interaction_matrix = np.zeros((n_comps, n_comps))
+
+                # Fill in the matrix
+                for pair, data in circuit_data['pairwise_interactions'].items():
+                    comp1, comp2 = pair.split('+')
+
+                    i = unique_comps.index(comp1)
+                    j = unique_comps.index(comp2)
+
+                    interaction_matrix[i, j] = data['interaction']
+                    interaction_matrix[j, i] = data['interaction']  # Symmetric
+
+                # Create heatmap
+                plt.figure(figsize=(10, 8))
+                sns.heatmap(interaction_matrix, annot=True, fmt=".3f",
+                            xticklabels=unique_comps, yticklabels=unique_comps,
+                            cmap='coolwarm', center=0)
+
+                plt.title(f'Pairwise Component Interactions at Jump {jump_epoch}')
+                plt.tight_layout()
+                plt.savefig(viz_dir / f"jump_{jump_epoch}_interaction_heatmap.png")
+                plt.close()
+
+
+
 # Define the SparseAutoencoder class that was referenced
 class SparseAutoencoder(torch.nn.Module):
     """

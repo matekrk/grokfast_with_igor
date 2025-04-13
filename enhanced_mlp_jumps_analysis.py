@@ -9,15 +9,15 @@ from jump_analysis_tools import JumpAnalysisTools
 from utils import init_train_dataloader_state, FittingScore
 
 
-def train_with_enhanced_analysis(model, train_loader, eval_loader,
-                                 dataset_split_indices,
-                                 criterion, optimizer, scheduler,
-                                 epochs, device,
-                                 checkpointManager,
-                                 log_interval=5,
-                                 analyze_interval=50,
-                                 jump_detection_threshold=2.0,
-                                 checkpoint_interval=200):
+def train_with_enhanced_jumps_analysis(model, train_loader, eval_loader,
+                                       dataset_split_indices,
+                                       criterion, optimizer, scheduler,
+                                       epochs, device,
+                                       checkpointManager,
+                                       log_interval=5,
+                                       analyze_interval=50,
+                                       jump_detection_threshold=2.0,
+                                       checkpoint_interval=200):
     """
     Train the model with enhanced weight space tracking and jump analysis
 
@@ -66,7 +66,7 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
         jump_detection_window=100,
         snapshot_freq=analyze_interval,
         sliding_window_size=10,  # Keep track of 10 recent states for better pre-jump analysis
-        dense_sampling=True,     # Sample more frequently for the sliding window
+        dense_sampling=True,  # Sample more frequently for the sliding window
         jump_threshold=jump_detection_threshold
     )
 
@@ -121,24 +121,24 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
         #     ((epoch - 1) % analyze_interval == 0) or
         #     ((epoch + 1) % analyze_interval == 0)
         # )
-        # More aggressive sampling around potential transition points
-        # force_snapshot = (
-        #         epoch > min_epoch_for_detection and (
-        #         epoch % analyze_interval == 0 or  # Regular interval
-        #         (epoch - 1) % analyze_interval == 0 or  # Just before
-        #         (epoch + 1) % analyze_interval == 0 or  # Just after
-        #         (epoch - 2) % analyze_interval == 0 or  # Two before
-        #         (epoch + 2) % analyze_interval == 0  # Two after
-        # ))
-
-        # Increase sampling rate when we notice larger weight changes
-        if epoch >= min_epoch_for_detection and 'weight_velocity' in model.logger.logs:
-            recent_velocities = model.logger.logs['weight_velocity'][-5:]
-            avg_velocity = sum(recent_velocities) / len(recent_velocities)
-            current_velocity = model.logger.logs['weight_velocity'][-1]
-
-            # If current velocity is significantly higher than recent average
-            force_snapshot = force_snapshot or (current_velocity > 1.5 * avg_velocity)
+        # info more aggressive sampling around potential transition points
+        force_snapshot = (
+                epoch > min_epoch_for_detection and (
+                epoch % analyze_interval == 0 or  # Regular interval
+                (epoch - 1) % analyze_interval == 0 or  # Just before
+                (epoch + 1) % analyze_interval == 0 or  # Just after
+                (epoch - 2) % analyze_interval == 0 or  # Two before
+                (epoch + 2) % analyze_interval == 0  # Two after
+        ))
+        # info sampling based on actual velocity values
+        # info increase sampling rate when we notice larger weight changes
+        # if epoch >= 2 and 'weight_velocity' in model.logger.logs:
+        #     recent_velocities = model.logger.logs['weight_velocity'][-5:]
+        #     avg_velocity = sum(recent_velocities) / len(recent_velocities)
+        #     current_velocity = model.logger.logs['weight_velocity'][-1]
+        #
+        # info if current velocity is significantly higher than recent average
+        #     force_snapshot = force_snapshot or (current_velocity > 1.5 * avg_velocity)
 
         # info return true if snapshot was taken for this epoch
         took_snapshot = weight_tracker.take_snapshot(epoch=epoch, force=force_snapshot)
@@ -164,7 +164,9 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
             print(f"Epoch {epoch:5d}: Train Loss={train_loss:.3g}, Train Acc={train_accuracy:.4f}, "
                   f"Val Loss={eval_loss:.5g}, Val Acc={eval_accuracy:.4f}, Fitting_score={fitting_score:.4f}")
 
-            # Track metrics for grokking detection
+        all_grokking_tests = False
+        if all_grokking_tests:
+            # info track metrics for grokking detection
             track_metrics_for_grokking(epoch=epoch, model=model, train_loader=train_loader, eval_loader=eval_loader)
 
         # info check for pending jumps that need analysis
@@ -178,11 +180,11 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
 
             # info analyze pending jumps with balanced before/after snapshots
             jump_results = weight_tracker.analyze_pending_jumps(
-                    inputs=sample_inputs,
-                    targets=sample_targets,
-                    criterion=criterion,
-                    jump_analyzer=jump_analyzer
-                )
+                inputs=sample_inputs,
+                targets=sample_targets,
+                criterion=criterion,
+                jump_analyzer=jump_analyzer
+            )
             # info process results
             for result in jump_results:
                 jump_epoch = result['jump_epoch']
@@ -414,79 +416,4 @@ def get_loss_landscape_slice(model, inputs, targets, criterion, direction1, dire
 
     return landscape, steps
 
-
-def analyze_model_at_jump(model, checkpoint_path, jump_epoch, eval_loader, criterion, device):
-    """
-    Load a model checkpoint and analyze it at a specific jump point
-
-    Parameters:
-    -----------
-    model : torch.nn.Module
-        The model to analyze
-    checkpoint_path : str or Path
-        Path to the checkpoint directory
-    jump_epoch : int
-        The epoch of the jump to analyze
-    eval_loader : DataLoader
-        Evaluation data loader
-    criterion : loss function
-        Loss function
-    device : torch.device
-        Device to run analysis on
-
-    Returns:
-    --------
-    dict
-        Analysis results
-    """
-    # Load the checkpoint
-    checkpoint_path = Path(checkpoint_path)
-    checkpoint_file = checkpoint_path / f"checkpoint_step_{jump_epoch}.pt"
-
-    if not checkpoint_file.exists():
-        print(f"Checkpoint file not found: {checkpoint_file}")
-        return None
-
-    # Load checkpoint
-    checkpoint = torch.load(checkpoint_file)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-
-    # Initialize analysis tools
-    jump_analyzer = JumpAnalysisTools(
-        model=model,
-        save_dir=checkpoint_path / "jump_analysis",
-        logger=model.logger if hasattr(model, "logger") else None
-    )
-
-    # Get a batch of data
-    sample_inputs, sample_targets = next(iter(eval_loader))
-    sample_inputs, sample_targets = sample_inputs.to(device), sample_targets.to(device)
-
-    # Analyze loss landscape
-    landscape_analysis = jump_analyzer.analyze_loss_curvature(
-        inputs=sample_inputs,
-        targets=sample_targets,
-        criterion=criterion
-    )
-
-    # Analyze head attribution
-    attribution_analysis = model.analyze_head_attribution(eval_loader)
-
-    # Analyze attention patterns
-    attention_entropy = model.compute_attention_entropy(eval_loader)
-
-    # Get attention patterns
-    _ = model(sample_inputs, store_attention=True)
-    attention_patterns = model.get_attention_patterns()
-
-    results = {
-        'epoch': jump_epoch,
-        'landscape_analysis': landscape_analysis,
-        'attribution_analysis': attribution_analysis,
-        'attention_entropy': attention_entropy,
-        'attention_patterns': {k: v.cpu().numpy() for k, v in attention_patterns.items()} if attention_patterns else {}
-    }
-
-    return results
 
