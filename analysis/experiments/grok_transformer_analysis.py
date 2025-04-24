@@ -6,17 +6,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch import optim
-from tqdm import tqdm
 
-from analysis import train_with_analysis
-from analysis_transformer import Decoder
-from checkpoint_manager import GrokAwareCheckpointManager
-from enhanced_analysis import train_with_enhanced_analysis
-from grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
-from modular_data import create_modular_dataloaders
-from track_gradients import WeightSpaceTracker, CyclicBehaviorDetector, analyze_gradient_flow, analyze_loss_curvature
-from utils import init_train_dataloader_state, init_val_dataloader_state
-from visualization import visualize_model_analysis
+# warning is this import OK?
+from analysis.analysis import train_with_analysis
+from analysis.models.analysis_transformer import Decoder
+from analysis.utils.checkpoint_manager import GrokAwareCheckpointManager
+from analysis.enhanced_analysis import train_with_enhanced_analysis
+from analysis.models.modular_data import create_modular_dataloaders
 
 
 def create_model(embedding, num_layers, heads_per_layer, batch_size,
@@ -33,7 +29,7 @@ def create_model(embedding, num_layers, heads_per_layer, batch_size,
     sched = f'_{scheduler_name}' if scheduler_name else ''
     lr = f'_lr{learning_rate}' if learning_rate > 0 else ''
     wd = f'_wd{weight_decay:.1g}' if weight_decay > 0 else ''
-    id = f"l{num_layers}_h{heads_per_layer}_e{embedding}_b{batch_size}_{operation[:4]}{xavier}{optim}{lr}{wd}{sched}_r{ratio}_{ff}"
+    id = f"l{num_layers}_h{heads_per_layer}_e{embedding}_b{batch_size}_{operation[:4]}-{num_tokens-2}{xavier}{optim}{lr}{wd}{sched}_r{ratio}_{ff}"
 
     # info save_dir
     save_dir = Path(base_dir) / f"{id}"
@@ -88,7 +84,7 @@ def main_with_analysis(args):
         optimizer_name=args.optimizer,
         scheduler_name=args.scheduler,
         learning_rate=args.lr, weight_decay=args.weight_decay,
-        base_dir="results",
+        base_dir="../../results",
         init_xavier=False, )
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     if args.optimizer.lower() == 'sgd':
@@ -179,7 +175,7 @@ def main_with_enhanced_tracking(args):
         scheduler_name=args.scheduler,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
-        base_dir="results",
+        base_dir="../../results",
         init_xavier=False,
     )
 
@@ -289,14 +285,14 @@ if __name__ == "__main__":
     parser.add_argument("--num_heads", type=int, default=4)
 
     # run params
-    parser.add_argument("--label", default="")
+    parser.add_argument("--label", default="")  # fixme ?
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--p", type=int, default=97)
-    parser.add_argument("--budget", type=int, default=3e5)
+    parser.add_argument("--p", type=int, default=97)  # fixme ?
+    parser.add_argument("--budget", type=int, default=3e5)  # fixme ?
     parser.add_argument("--batch_size", type=int, default=256)  # 512)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--beta1", type=float, default=0.9)
-    parser.add_argument("--beta2", type=float, default=0.98)
+    parser.add_argument("--beta1", type=float, default=0.9)  # fixme ?
+    parser.add_argument("--beta2", type=float, default=0.98)  # fixme ?
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--optimizer", default="Adam")
     parser.add_argument("--scheduler", default=None)
@@ -304,23 +300,17 @@ if __name__ == "__main__":
 
     parser.add_argument("--enhanced", action="store_true", help="Run enhanced analysis")
 
-    # Grokfast
-    # parser.add_argument("--filter", type=str, choices=["none", "ma", "ema", "fir"], default="none")
-    # parser.add_argument("--alpha", type=float, default=0.99)
-    # parser.add_argument("--window_size", type=int, default=100)
-    # parser.add_argument("--lamb", type=float, default=5.0)
-
     # analysis intervals
     parser.add_argument("--epochs", type=int, default=10000)
-    parser.add_argument("--analyze_interval", type=int, default=100)
-    parser.add_argument("--log_interval", type=int, default=10)
-    parser.add_argument("--checkpoint_interval", type=int, default=100)
+    parser.add_argument("--analyze_interval", type=int, default=24)
+    parser.add_argument("--log_interval", type=int, default=8)
+    parser.add_argument("--checkpoint_interval", type=int, default=200)
 
     parser.add_argument("--operation", type=str, default='multiply')
 
     # Ablation studies
-    parser.add_argument("--two_stage", action='store_true')
-    parser.add_argument("--save_weights", action='store_true')
+    parser.add_argument("--two_stage", action='store_true')  # fixme ?
+    parser.add_argument("--save_weights", action='store_true')  # fixme ?
     args = parser.parse_args()
 
     if args.enhanced:

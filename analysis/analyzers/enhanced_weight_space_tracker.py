@@ -1,26 +1,30 @@
 from collections import defaultdict
-
-import numpy as np
-import torch
-import matplotlib.pyplot as plt
 from pathlib import Path
-from scipy.signal import find_peaks
+
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
+import torch
 from sklearn.decomposition import PCA
 
+from analysis.core.weight_space import WeightSpaceTracker
 
-class EnhancedWeightSpaceTracker:
+
+# todo let EnhancedWeightSpaceTracker inherit from analysis.core.weight_space.WeightSpaceTracker
+class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
     """Enhanced tracker for model's trajectory in weight space with jump detection and analysis"""
 
-    def __init__(self, model, save_dir, logger=None, pca_components=50, snapshot_freq=10,
+    def __init__(self, model, save_dir=None, pca_components=50, logger=None, snapshot_freq=10,
                  sliding_window_size=5, dense_sampling=True, jump_detection_window=100,
                  jump_threshold=1.0):
-        # Existing initialization code...
-        self.model = model
-        self.save_dir = Path(save_dir)
+        # info initialization code...
+                                                                    # info is in base
+        self.model = model                                          # fixme yes
+        self.save_dir = Path(save_dir)                              # fixme yes
         self.save_dir.mkdir(exist_ok=True, parents=True)
-        self.pca_components = pca_components
+
+        self.pca_components = pca_components                        # fixme yes
         self.snapshot_freq = snapshot_freq
         self.jump_detection_window = jump_detection_window
         self.jump_threshold = jump_threshold
@@ -30,14 +34,14 @@ class EnhancedWeightSpaceTracker:
         self.sliding_window_size = sliding_window_size  # Number of recent epochs to keep
         self.dense_sampling = dense_sampling  # Whether to sample more densely between snapshots
 
-        # Storage for weight snapshots and trajectories
+        # info storage for weight snapshots and trajectories
         self.weight_snapshots = []
         self.weight_timestamps = []
-        self.flattened_weights = []
+        self.flattened_weights = []                                 # fixme yes
         self.velocities = []
         self.accelerations = []
-        self.pca = None
-        self.pca_fitted = False
+        self.pca = None                                             # fixme yes
+        self.pca_fitted = False                                     # fixme yes
 
         # todo perhaps it would be better to track ALL the snapshots, but then remove these that were NOT used?
 
@@ -45,20 +49,20 @@ class EnhancedWeightSpaceTracker:
         self.recent_snapshots = []  # info shall contain (epoch, state_dict, flattened_vector) tuples
         self.last_jump_epoch = None  # info track when the last jump occurred
 
-        # Jump detection
+        # info jump detection
         self.detected_jumps = []
         self.jump_analysis = {}
         self.pending_jumps = []  # info track jumps that need analysis
 
-        # Create directories for detailed analysis
+        # info create directories for detailed analysis
         self.jump_dir = self.save_dir / "jump_analysis"
         self.jump_dir.mkdir(exist_ok=True, parents=True)
 
-        # label height for "jump at {epoch}"
+        # info label height for "jump at {epoch}"
         self.label_height = 0.0
         self.label_height_shift = 0.09
 
-        # Counter for jump analysis
+        # info counter for jump analysis
         self.jump_counter = 0
 
     def take_snapshot(self, epoch, force=False):
@@ -87,7 +91,7 @@ class EnhancedWeightSpaceTracker:
                     group_velocities['head_velocities'].items(),
                     key=lambda x: x[1],
                     reverse=True
-                )[:5]  # Top 5 changing heads
+                )[:5]  # info top 5 changing heads
 
                 for head, velocity in top_head_velocities:
                     if velocity > 0.1:  # Only log if change is significant
@@ -97,7 +101,7 @@ class EnhancedWeightSpaceTracker:
         if epoch % self.snapshot_freq == 0 or force:
             spectral_stats = self.track_spectral_properties(epoch, current_state_dict)
             if spectral_stats and self.logger:
-                # Log key spectral properties
+                # info log key spectral properties
                 for component, stats in spectral_stats.items():
                     self.logger.log_data('spectral_properties',
                                          f'{component}_condition',
@@ -150,7 +154,7 @@ class EnhancedWeightSpaceTracker:
 
                 # info if a jump is detected, queue it for analysis with pre-jump state
                 if jump_detected:
-                    # info find the most recent pre-jump snapshot from sliding window
+                    # info find the most recent pre-jump snapshot from sliding window  # fixme LAST??
                     pre_jump_snapshot = self._find_pre_jump_snapshot(epoch)
                     if pre_jump_snapshot:
                         pre_jump_epoch, pre_jump_state, pre_jump_vector = pre_jump_snapshot
@@ -161,6 +165,7 @@ class EnhancedWeightSpaceTracker:
                             'pre_jump_state': pre_jump_state,
                             'pre_jump_vector': pre_jump_vector
                         })
+                    print([np.linalg.norm(self.flattened_weights[-k-1]-self.flattened_weights[-k-2]) for k in range(len(self.recent_snapshots)-1)])
 
         if should_store:
             self.flattened_weights.append(flattened_vector)
@@ -180,7 +185,6 @@ class EnhancedWeightSpaceTracker:
 
         return False
 
-
     def _find_pre_jump_snapshot(self, jump_epoch):
         """Find the most recent snapshot before the jump epoch"""
         # Sort snapshots by epoch in descending order
@@ -194,51 +198,190 @@ class EnhancedWeightSpaceTracker:
         # info if no suitable snapshot found, return None
         return None
 
-    def analyze_pending_jumps(self, inputs, targets, criterion, jump_analyzer):
-        """Analyze any pending jumps with pre-jump states"""
-        if not self.pending_jumps:
+    # Add to EnhancedWeightSpaceTracker class
+    def get_window_snapshots(self, center_epoch, window_size=5):
+        """
+        Get an array of snapshots centered around a specific epoch with the given window size
+
+        Args:
+            center_epoch: The center epoch to get snapshots around
+            window_size: How many snapshots to get before and after (total will be 2*window_size+1)
+
+        Returns:
+            list: List of snapshot dictionaries ordered by epoch
+        """
+        # info get all available snapshots
+        all_snapshots = self.weight_snapshots.copy()
+
+        # info sort by epoch distance from center
+        all_snapshots.sort(key=lambda s: abs(s['epoch'] - center_epoch))
+
+        # info separate into before, at, and after center
+        center_snapshot = None
+        before_snapshots = []
+        after_snapshots = []
+
+        for snapshot in all_snapshots:
+            if snapshot['epoch'] == center_epoch:
+                center_snapshot = snapshot
+            elif snapshot['epoch'] < center_epoch:
+                before_snapshots.append(snapshot)
+            else:
+                after_snapshots.append(snapshot)
+
+        # info sort by epoch
+        before_snapshots.sort(key=lambda s: s['epoch'], reverse=True)  # Newest first
+        after_snapshots.sort(key=lambda s: s['epoch'])  # Oldest first
+
+        # info take up to window_size before and after
+        before_snapshots = before_snapshots[:window_size]
+        after_snapshots = after_snapshots[:window_size]
+
+        # info combine in chronological order
+        result = before_snapshots[::-1]  # Reverse to get chronological order
+        if center_snapshot:
+            result.append(center_snapshot)
+        result.extend(after_snapshots)
+
+        return result
+
+    def analyze_extended_jump(self, jump_epoch, window_size=5):
+        """
+        Analyze a jump with a wider time window to capture gradual transformer changes
+
+        Args:
+            jump_epoch: The epoch of the jump to analyze
+            window_size: Number of snapshots to analyze before and after the jump
+
+        Returns:
+            dict: Extended analysis results
+        """
+        # info get snapshots around the jump
+        snapshots = self.get_window_snapshots(jump_epoch, window_size)
+
+        if len(snapshots) < 3:
+            print(f"Not enough snapshots around jump at epoch {jump_epoch}")
             return None
 
+        # info calculate change trajectory
+        epochs = [s['epoch'] for s in snapshots]
+        changes = []
+
+        # info compare each consecutive pair of snapshots
+        for i in range(1, len(snapshots)):
+            prev_state = snapshots[i - 1]['state_dict']
+            curr_state = snapshots[i]['state_dict']
+
+            # info calculate total change
+            total_change = 0
+            for name, curr_param in curr_state.items():
+                if name in prev_state:
+                    prev_param = prev_state[name]
+                    change = torch.norm(curr_param - prev_param).item()
+                    total_change += change
+
+            changes.append(total_change)
+
+        # info create layer and head-specific change trajectories
+        layer_trajectories = defaultdict(list)
+        head_trajectories = defaultdict(list)
+
+        # info for each layer and head, track changes over time
+        for i in range(1, len(snapshots)):
+            prev_state = snapshots
+
+    def _find_closest_snapshot(self, epoch):
+        # info find the index in recent_snapshots that is for epoch closest to one in param
+        best_idx = np.argmin([abs((self.recent_snapshots[:][k][0] - epoch)) for k in range(len(self.recent_snapshots))])
+        return [self.recent_snapshots[:][k][0] for k in range(len(self.recent_snapshots))][best_idx]
+
+    def get_snapshot(self, epoch):
+        # info return index in recent snapshots with that of epoch in param fixme if epoch not on recent_snapshots, add searching on weight_snapshots
+        best_idx = [self.recent_snapshots[:][k][0] for k in range(len(self.recent_snapshots))].index(epoch)
+        return self.recent_snapshots[best_idx]
+
+    def analyze_pending_jumps(self, inputs, targets, criterion, jump_analyzer,
+                              eval_loader = None, optimizer=None, mini_train_steps=10):
+        """
+        Analyze pending jumps with option to briefly train for post-jump state
+
+        Args:
+            inputs: Batch of inputs for analysis
+            targets: Batch of targets
+            criterion: Loss function
+            jump_analyzer: Jump analyzer object
+            optimizer: Optional optimizer for mini-training
+            mini_train_steps: Number of steps to train for post-jump state
+
+        Returns:
+            list: Analysis results for pending jumps
+        """
         results = []
+        if not self.pending_jumps:
+            return results
+
+        # info store current model to restore after tarining
+        original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
         # info get epoch numbers for epochs in jump window
         for pending_jump in self.pending_jumps:
             jump_epoch = pending_jump['jump_epoch']
-            pre_jump_epoch = pending_jump['pre_jump_epoch']
-            pre_jump_state = pending_jump['pre_jump_state']
+            print(f"analyzing jump at epoch {jump_epoch}")
 
-            # info find the jump snapshot
-            jump_snapshot = None
-            for snapshot in self.weight_snapshots:
-                if snapshot['epoch'] == jump_epoch:
-                    jump_snapshot = snapshot
-                    break##
+            # info get pre jump epoch and state
+            # fixme mini_train_steps
+            pre_jump_epoch = self._find_closest_snapshot(jump_epoch - mini_train_steps)
+            pre_jump_snapshot = self.get_snapshot(pre_jump_epoch)
+            # fixme or as below?
+            # pre_jump_epoch = pending_jump['pre_jump_epoch']
+            # pre_jump_state = pending_jump['pre_jump_state']
+            # info get current snapshot warning get_snapshot() operates only on self.recent_snapshots # a jesli wywolane gdzie indziej???
+            jump_snapshot = self.get_snapshot(jump_epoch)
 
-            if jump_snapshot is None:
-                print(f"Warning: Jump snapshot for epoch {jump_epoch} not found")
-                continue
-
-            # Find the next snapshot after the jump
-            post_jump_snapshot = None
-            for snapshot in self.weight_snapshots:
-                if snapshot['epoch'] > jump_epoch:
-                    post_jump_snapshot = snapshot
-                    break
-
-            # info if no post-jump snapshot exists, create a simulated one at jump_epoch + 0.1
-            # todo simulate the next snapshot by learning from a small sample?
-            if post_jump_snapshot is None:
-                # info use current model state for post-jump (will be saved as jump_epoch + 0.1)
+            # info reformat pre_ and jump_ snapshots to {'epoch': int, 'state_dict': {dict: 29}} format
+            pre_jump_snapshot = {'epoch': pre_jump_epoch,
+                              'state_dict': pre_jump_snapshot[1]}
+            jump_snapshot = {'epoch': jump_epoch,
+                             'state_dict': jump_snapshot[1]}
+            # info create true post-jump state using short training
+            if optimizer is not None:
+                # info load the jump state
+                self.model.load_state_dict(jump_snapshot['state_dict'])
+                # info perform some traing epochs
+                self.model.train()
+                if eval_loader is not None:
+                    for _ in range(mini_train_steps):
+                        train_loss = 0.0
+                        train_total = 0
+                        for this_input, this_target in eval_loader:
+                            optimizer.zero_grad()
+                            # fixme how to get more than one input? pass dataloader?
+                            this_output = self.model(this_input)
+                            loss = criterion(this_output, this_target)
+                            loss.backward()
+                            optimizer.step()
+                            train_total += targets.size(0)
+                            train_loss += loss.item() * targets.size(0)
+                        train_loss = train_loss / train_total
+                        pass
+                else:
+                    for _ in range(2 * mini_train_steps):
+                        optimizer.zero_grad()
+                        # fixme how to get more than one input? pass dataloader?
+                        outputs = self.model(inputs)
+                        loss = criterion(outputs, targets)
+                        loss.backward()
+                        optimizer.step()
+                self.model.eval()
+                # info get the post jump state
                 post_jump_snapshot = {
-                    'epoch': jump_epoch + 0.1,
-                    'state_dict': {k: v.detach().cpu() for k, v in self.model.state_dict().items()}
+                    'epoch': jump_epoch + mini_train_steps / 100,
+                    'state_dict': {k: v.clone() for k, v in self.model.state_dict().items()}
                 }
+            else:
+                post_jump_snapshot = {'epoch': jump_epoch,
+                                      'state_dict': jump_snapshot[1]}
 
-            # info create a "pre-jump" snapshot explicitly
-            pre_jump_snapshot = {
-                'epoch': pre_jump_epoch,
-                'state_dict': pre_jump_state
-            }
             # info perform detailed jump characterization
             jump_char = self.characterize_jump(
                 jump_epoch,
@@ -292,44 +435,82 @@ class EnhancedWeightSpaceTracker:
                 post_jump_snapshot=post_jump_snapshot,
                 inputs=inputs,
                 targets=targets,
+                eval_loader=eval_loader,
                 criterion=criterion
             )
 
             # info combine all the results
+            # fixme add 'pre_jump_snapshot', 'jump_snapshot', 'post_jump_snapshot'
             combined_result = {
                 'jump_epoch': jump_epoch,
                 'analyzer_result': analyzer_result,
-                'characterization': jump_char
+                'characterization': jump_char,
+                'pre_jump_snapshot': pre_jump_snapshot,
+                'jump_snapshot': jump_snapshot,
+                'post_jump_snapshot': post_jump_snapshot,
             }
 
-            results.append(combined_result)
+        results.append(combined_result)
 
         # info clear pending jumps after analysis
         self.pending_jumps = []
+        # info restore original model
+        self.model.load_state_dict(original_state)
 
         return results
 
-    def characterize_jump(self, jump_epoch, pre_jump_snapshot, jump_snapshot, post_jump_snapshot):
+    def characterize_jump(self, jump_epoch, pre_jump_snapshot, jump_snapshot, post_jump_snapshot, window_size=5):
         """
-        Extract detailed characteristics of a jump to identify which components
-        are changing most significantly.
+        Enhanced characterization of a jump to better capture transformer structural changes
+        by analyzing within a wider window before and after the jump.
         """
-        pre_state = pre_jump_snapshot['state_dict']
+        # Get the jump type
+        jump_idx = None
+        for i, jump in enumerate(self.detected_jumps):
+            if jump['epoch'] == jump_epoch:
+                jump_idx = i
+                break
+
+        jump_type = self.detected_jumps[jump_idx]['jump_type'] if jump_idx is not None else "unknown"
+
+        # Define the analysis window
+        pre_epoch = pre_jump_snapshot['epoch']
+        jump_epoch = jump_snapshot['epoch']
+        post_epoch = post_jump_snapshot['epoch']
+
+        # For gradual jumps, we want to compare states further apart
+        if jump_type == "gradual":
+            # Try to find snapshots further back and ahead
+            pre_state = self._find_snapshot_at_epoch_offset(pre_epoch, -window_size)
+            if pre_state is None:
+                pre_state = pre_jump_snapshot['state_dict']
+            else:
+                pre_state = pre_state['state_dict']
+
+            post_state = self._find_snapshot_at_epoch_offset(post_epoch, window_size)
+            if post_state is None:
+                post_state = post_jump_snapshot['state_dict']
+            else:
+                post_state = post_state['state_dict']
+        else:
+            pre_state = pre_jump_snapshot['state_dict']
+            post_state = post_jump_snapshot['state_dict']
+
         jump_state = jump_snapshot['state_dict']
-        post_state = post_jump_snapshot['state_dict']
 
-        # info calculate component-specific changes
+        # Component changes tracking
         component_changes = defaultdict(dict)
-
-        # info track overall changes
         total_pre_to_jump = 0
         total_jump_to_post = 0
 
-        # info analyze layer and head-specific changes
+        # Layer and head specific changes
         layer_changes = defaultdict(lambda: {'pre_to_jump': 0, 'jump_to_post': 0})
         head_changes = defaultdict(lambda: {'pre_to_jump': 0, 'jump_to_post': 0})
 
-        # info compute detailed change metrics
+        # Track structural changes using SVD analysis
+        svd_changes = {}
+
+        # Analyze each parameter
         for name, jump_param in jump_state.items():
             if name not in pre_state or name not in post_state:
                 continue
@@ -337,145 +518,91 @@ class EnhancedWeightSpaceTracker:
             pre_param = pre_state[name]
             post_param = post_state[name]
 
-            # info compute changes
+            # Compute standard changes
             pre_to_jump_change = torch.norm(jump_param - pre_param).item()
             jump_to_post_change = torch.norm(post_param - jump_param).item()
 
-            # info track total change
+            # Track total change
             total_pre_to_jump += pre_to_jump_change
             total_jump_to_post += jump_to_post_change
 
-            # info categorize by component type
-            component_type = 'other'
-            if 'attn' in name and 'in_proj' in name:
-                component_type = 'attention_qkv'
-            elif 'attn' in name and 'out_proj' in name:
-                component_type = 'attention_output'
-            elif 'mlp.0' in name or 'mlp.up_proj' in name:
-                component_type = 'mlp_up'
-            elif 'mlp.2' in name or 'mlp.down_proj' in name:
-                component_type = 'mlp_down'
-            elif 'ln' in name or 'norm' in name:
-                component_type = 'layernorm'
-            elif 'embed' in name:
-                component_type = 'embedding'
+            # Enhanced analysis for weight matrices
+            if len(jump_param.shape) >= 2 and min(jump_param.shape) > 1:
+                # Perform SVD to analyze structural changes
+                try:
+                    # Pre-jump to jump change
+                    if pre_param.shape == jump_param.shape:
+                        pre_U, pre_S, pre_V = torch.svd(pre_param)
+                        jump_U, jump_S, jump_V = torch.svd(jump_param)
 
+                        # Compare singular values
+                        sing_change = torch.norm(jump_S - pre_S).item() / torch.norm(pre_S).item()
+
+                        # Compare principal directions (first few right singular vectors)
+                        num_vectors = min(3, pre_V.shape[1])
+                        direction_change = 0
+                        for i in range(num_vectors):
+                            # Account for sign ambiguity in SVD
+                            sim = max(
+                                torch.abs(torch.dot(pre_V[:, i], jump_V[:, i])).item(),
+                                torch.abs(torch.dot(pre_V[:, i], -jump_V[:, i])).item()
+                            )
+                            direction_change += 1.0 - sim
+                        direction_change /= num_vectors
+
+                        svd_changes[name] = {
+                            'singular_value_change': sing_change,
+                            'direction_change': direction_change
+                        }
+                except:
+                    # SVD may fail for some tensors
+                    pass
+
+            # Categorize by component type
+            component_type = self._categorize_parameter(name)
             component_changes[component_type][name] = {
                 'pre_to_jump': pre_to_jump_change,
                 'jump_to_post': jump_to_post_change,
                 'relative_change': pre_to_jump_change / (torch.norm(pre_param).item() + 1e-8)
             }
 
-            # info extract layer and head info if possible
+            # Extract layer and head info
             if 'layers.' in name:
-                parts = name.split('.')
-                try:
-                    layer_idx = int(parts[1])
-                    layer_key = f'layer_{layer_idx}'
+                self._extract_layer_head_changes(
+                    name, pre_param, jump_param, post_param,
+                    layer_changes, head_changes
+                )
 
-                    layer_changes[layer_key]['pre_to_jump'] += pre_to_jump_change
-                    layer_changes[layer_key]['jump_to_post'] += jump_to_post_change
+        # Normalize layer and head changes
+        self._normalize_changes(layer_changes, head_changes)
 
-                    # info check for head-specific parameters
-                    if 'attn' in name and hasattr(self.model, 'dim') and hasattr(self.model, 'num_heads'):
-                        head_dim = self.model.dim // self.model.num_heads
+        # Find top changing components
+        top_changing = self._find_top_changing_components(component_changes)
 
-                        # info handle input projection (QKV)
-                        if 'in_proj_weight' in name:
-                            dim = self.model.dim
-                            for h in range(self.model.num_heads):
-                                start = h * head_dim
-                                end = (h + 1) * head_dim
-
-                                # info extract head-specific weights for Q, K, V
-                                q_pre = pre_param[:dim][start:end]
-                                q_jump = jump_param[:dim][start:end]
-                                q_post = post_param[:dim][start:end]
-
-                                k_pre = pre_param[dim:2 * dim][start:end]
-                                k_jump = jump_param[dim:2 * dim][start:end]
-                                k_post = post_param[dim:2 * dim][start:end]
-
-                                v_pre = pre_param[2 * dim:][start:end]
-                                v_jump = jump_param[2 * dim:][start:end]
-                                v_post = post_param[2 * dim:][start:end]
-
-                                # info compute head-specific changes
-                                head_key = f'layer_{layer_idx}_head_{h}'
-                                head_changes[head_key]['pre_to_jump'] += (
-                                        torch.norm(q_jump - q_pre).item() +
-                                        torch.norm(k_jump - k_pre).item() +
-                                        torch.norm(v_jump - v_pre).item()
-                                )
-                                head_changes[head_key]['jump_to_post'] += (
-                                        torch.norm(q_post - q_jump).item() +
-                                        torch.norm(k_post - k_jump).item() +
-                                        torch.norm(v_post - v_jump).item()
-                                )
-
-                        # info handle output projection
-                        elif 'out_proj.weight' in name:
-                            for h in range(self.model.num_heads):
-                                start = h * head_dim
-                                end = (h + 1) * head_dim
-
-                                head_key = f'layer_{layer_idx}_head_{h}'
-                                head_changes[head_key]['pre_to_jump'] += torch.norm(
-                                    jump_param[:, start:end] - pre_param[:, start:end]
-                                ).item()
-                                head_changes[head_key]['jump_to_post'] += torch.norm(
-                                    post_param[:, start:end] - jump_param[:, start:end]
-                                ).item()
-                except:
-                    pass
-
-        # info normalize layer and head changes to highlight relative importance
-        #  this helps identify which layers/heads are changing most significantly
-        if layer_changes:
-            max_layer_change = max(item['pre_to_jump'] for item in layer_changes.values())
-            for layer, changes in layer_changes.items():
-                changes['normalized_change'] = changes['pre_to_jump'] / (max_layer_change + 1e-8)
-
-        if head_changes:
-            max_head_change = max(item['pre_to_jump'] for item in head_changes.values())
-            for head, changes in head_changes.items():
-                changes['normalized_change'] = changes['pre_to_jump'] / (max_head_change + 1e-8)
-
-        # info find top changing components by category
-        top_changing = {}
-        for component_type, params in component_changes.items():
-            sorted_params = sorted(params.items(), key=lambda x: x[1]['pre_to_jump'], reverse=True)
-            top_changing[component_type] = sorted_params[:min(5, len(sorted_params))]
-
-        # info get a ranked list of most-changed layers and heads
-        sorted_layers = sorted(layer_changes.items(),
-                               key=lambda x: x[1]['pre_to_jump'],
-                               reverse=True)
-        sorted_heads = sorted(head_changes.items(),
-                              key=lambda x: x[1]['pre_to_jump'],
-                              reverse=True)
-
-        # info calculate spectral changes across the jump
+        # Calculate spectral changes
         pre_spectral = self.track_spectral_properties(jump_epoch - 1, pre_state)
         jump_spectral = self.track_spectral_properties(jump_epoch, jump_state)
 
-        # info build comprehensive jump characterization
+        # Build comprehensive characterization with enhanced structural info
         characterization = {
             'jump_epoch': jump_epoch,
+            'jump_type': jump_type,
             'pre_epoch': pre_jump_snapshot['epoch'],
             'post_epoch': post_jump_snapshot['epoch'],
             'total_magnitude': {
                 'pre_to_jump': total_pre_to_jump,
                 'jump_to_post': total_jump_to_post,
-                # Whether changes are symmetric or biased before/after jump
                 'symmetry_ratio': total_pre_to_jump / (total_jump_to_post + 1e-8)
             },
             'component_changes': {k: v for k, v in component_changes.items()},
             'top_changing_components': top_changing,
-            'layer_changes': dict(sorted_layers),
-            'head_changes': dict(sorted_heads),
-            'top_layers': [l[0] for l in sorted_layers[:3]],
-            'top_heads': [h[0] for h in sorted_heads[:3]],
+            'layer_changes': dict(sorted(layer_changes.items(), key=lambda x: x[1]['pre_to_jump'], reverse=True)),
+            'head_changes': dict(sorted(head_changes.items(), key=lambda x: x[1]['pre_to_jump'], reverse=True)),
+            'top_layers': [l[0] for l in
+                           sorted(layer_changes.items(), key=lambda x: x[1]['pre_to_jump'], reverse=True)[:3]],
+            'top_heads': [h[0] for h in
+                          sorted(head_changes.items(), key=lambda x: x[1]['pre_to_jump'], reverse=True)[:3]],
+            'svd_changes': svd_changes,
             'spectral_changes': {
                 component: {
                     'condition_number_change': jump_spectral.get(component, {}).get('condition_number', 0) -
@@ -489,55 +616,315 @@ class EnhancedWeightSpaceTracker:
 
         return characterization
 
+    def _find_snapshot_at_epoch_offset(self, base_epoch, offset):
+        """Find a snapshot at base_epoch + offset, or the closest available"""
+        target_epoch = base_epoch + offset
+
+        # Sort snapshots by epoch distance from target
+        sorted_snapshots = sorted(self.weight_snapshots,
+                                  key=lambda s: abs(s['epoch'] - target_epoch))
+
+        # Return the closest one that's in the right direction
+        for snapshot in sorted_snapshots:
+            # For negative offset, want snapshot earlier than base_epoch
+            if offset < 0 and snapshot['epoch'] < base_epoch:
+                return snapshot
+            # For positive offset, want snapshot later than base_epoch
+            elif offset > 0 and snapshot['epoch'] > base_epoch:
+                return snapshot
+
+        # If no suitable snapshot found, return None
+        return None
+
+    def _categorize_parameter(self, name):
+        """Categorize parameter by type with more specific categorization"""
+        if 'attn' in name:
+            if 'in_proj' in name:
+                # Further distinguish QKV components where possible
+                # Detect possible separate Q,K,V components (depends on PyTorch version)
+                if 'q_proj' in name:
+                    return 'attention_query'
+                elif 'k_proj' in name:
+                    return 'attention_key'
+                elif 'v_proj' in name:
+                    return 'attention_value'
+                else:
+                    return 'attention_qkv'
+            elif 'out_proj' in name:
+                return 'attention_output'
+        elif 'mlp' in name:
+            if any(up_term in name for up_term in ['0.weight', 'up_proj', 'c_fc']):
+                return 'mlp_up'
+            elif any(down_term in name for down_term in ['2.weight', 'down_proj', 'c_proj']):
+                return 'mlp_down'
+            else:
+                return 'mlp_other'
+        elif any(norm_term in name for norm_term in ['ln', 'norm', 'layer_norm']):
+            return 'layernorm'
+        elif 'embed' in name:
+            return 'embedding'
+        else:
+            return 'other'
+
+    def _extract_layer_head_changes(self, name, pre_param, jump_param, post_param,
+                                    layer_changes, head_changes):
+        """Extract layer and head specific changes with enhanced detection"""
+        parts = name.split('.')
+        try:
+            # Extract layer index
+            if 'layers.' in name:
+                layer_idx = int(parts[parts.index('layers') + 1])
+            else:
+                # Try other common patterns
+                for i, part in enumerate(parts):
+                    if part.isdigit() and i > 0 and parts[i - 1] in ['layer', 'transformer', 'block']:
+                        layer_idx = int(part)
+                        break
+                else:
+                    return  # No layer found
+
+            layer_key = f'layer_{layer_idx}'
+
+            # Track layer changes
+            pre_to_jump = torch.norm(jump_param - pre_param).item()
+            jump_to_post = torch.norm(post_param - jump_param).item()
+
+            layer_changes[layer_key]['pre_to_jump'] += pre_to_jump
+            layer_changes[layer_key]['jump_to_post'] += jump_to_post
+
+            # Enhanced head detection
+            if (('attn' in name or 'attention' in name) and
+                    hasattr(self.model, 'dim') and hasattr(self.model, 'num_heads')):
+                self._analyze_attention_head_changes(
+                    name, layer_idx, pre_param, jump_param, post_param, head_changes
+                )
+        except:
+            pass
+
+    def _analyze_attention_head_changes(self, name, layer_idx, pre_param, jump_param, post_param, head_changes):
+        """Detailed analysis of attention head changes with better detection"""
+        model = self.model
+        head_dim = model.dim // model.num_heads
+
+        # For different attention implementations:
+
+        # 1. Standard PyTorch MultiheadAttention (QKV stacked in in_proj_weight)
+        if 'in_proj_weight' in name:
+            dim = model.dim
+            for h in range(model.num_heads):
+                start = h * head_dim
+                end = (h + 1) * head_dim
+
+                # Extract head-specific weights for Q, K, V
+                q_pre = pre_param[:dim][start:end]
+                q_jump = jump_param[:dim][start:end]
+                q_post = post_param[:dim][start:end]
+
+                k_pre = pre_param[dim:2 * dim][start:end]
+                k_jump = jump_param[dim:2 * dim][start:end]
+                k_post = post_param[dim:2 * dim][start:end]
+
+                v_pre = pre_param[2 * dim:][start:end]
+                v_jump = jump_param[2 * dim:][start:end]
+                v_post = post_param[2 * dim:][start:end]
+
+                # Compute head-specific changes
+                head_key = f'layer_{layer_idx}_head_{h}'
+                head_changes[head_key]['pre_to_jump'] += (
+                        torch.norm(q_jump - q_pre).item() +
+                        torch.norm(k_jump - k_pre).item() +
+                        torch.norm(v_jump - v_pre).item()
+                )
+                head_changes[head_key]['jump_to_post'] += (
+                        torch.norm(q_post - q_jump).item() +
+                        torch.norm(k_post - k_jump).item() +
+                        torch.norm(v_post - v_jump).item()
+                )
+
+        # 2. Separate QKV projections
+        elif any(qkv in name for qkv in ['q_proj', 'k_proj', 'v_proj']):
+            for h in range(model.num_heads):
+                start = h * head_dim
+                end = (h + 1) * head_dim
+
+                # Take the relevant slice of the weight matrix
+                try:
+                    head_pre = pre_param[:, start:end] if pre_param.dim() > 1 else pre_param[start:end]
+                    head_jump = jump_param[:, start:end] if jump_param.dim() > 1 else jump_param[start:end]
+                    head_post = post_param[:, start:end] if post_param.dim() > 1 else post_param[start:end]
+
+                    head_key = f'layer_{layer_idx}_head_{h}'
+
+                    head_changes[head_key]['pre_to_jump'] += torch.norm(head_jump - head_pre).item()
+                    head_changes[head_key]['jump_to_post'] += torch.norm(head_post - head_jump).item()
+                except:
+                    pass
+
+        # 3. Output projection - common across architectures
+        elif 'out_proj.weight' in name or any(term in name for term in ['attn_output', 'o_proj']):
+            for h in range(model.num_heads):
+                start = h * head_dim
+                end = (h + 1) * head_dim
+
+                try:
+                    head_key = f'layer_{layer_idx}_head_{h}'
+
+                    # Output projection maps from head dimension back to model dimension
+                    # The slice depends on the matrix orientation
+                    if pre_param.shape[1] >= end:  # Check if we can slice on dim 1
+                        head_changes[head_key]['pre_to_jump'] += torch.norm(
+                            jump_param[:, start:end] - pre_param[:, start:end]
+                        ).item()
+                        head_changes[head_key]['jump_to_post'] += torch.norm(
+                            post_param[:, start:end] - jump_param[:, start:end]
+                        ).item()
+                    elif pre_param.shape[0] >= end:  # Try dim 0 instead
+                        head_changes[head_key]['pre_to_jump'] += torch.norm(
+                            jump_param[start:end] - pre_param[start:end]
+                        ).item()
+                        head_changes[head_key]['jump_to_post'] += torch.norm(
+                            post_param[start:end] - jump_param[start:end]
+                        ).item()
+                except:
+                    pass
+
+    def _normalize_changes(self, layer_changes, head_changes):
+        """Normalize changes to highlight relative importance"""
+        if layer_changes:
+            max_layer_change = max(item['pre_to_jump'] for item in layer_changes.values())
+            for layer, changes in layer_changes.items():
+                changes['normalized_change'] = changes['pre_to_jump'] / (max_layer_change + 1e-8)
+
+                # Additional relative-to-size normalization
+                layer_idx = int(layer.split('_')[1])
+                param_count = 0
+                for name, param in self.model.named_parameters():
+                    if f'layers.{layer_idx}.' in name:
+                        param_count += param.numel()
+
+                if param_count > 0:
+                    changes['size_normalized_change'] = changes['pre_to_jump'] / (param_count ** 0.5)
+
+        if head_changes:
+            max_head_change = max(item['pre_to_jump'] for item in head_changes.values())
+            for head, changes in head_changes.items():
+                changes['normalized_change'] = changes['pre_to_jump'] / (max_head_change + 1e-8)
+
+    def _find_top_changing_components(self, component_changes):
+        """Find top changing components by category with enhanced filters"""
+        top_changing = {}
+
+        for component_type, params in component_changes.items():
+            # Calculate average change magnitude for this component type
+            avg_change = np.mean([v['pre_to_jump'] for v in params.values()]) if params else 0
+
+            # Filter for parameters with significant changes (above average)
+            significant_params = {k: v for k, v in params.items() if v['pre_to_jump'] > avg_change}
+
+            # Sort by change magnitude
+            sorted_params = sorted(significant_params.items(), key=lambda x: x[1]['pre_to_jump'], reverse=True)
+
+            # Take top 5 or fewer if not enough
+            top_changing[component_type] = sorted_params[:min(5, len(sorted_params))]
+
+        return top_changing
+
     def _check_for_jumps(self, epoch, current_velocity_norm):
-        """Check if a jump has occurred based on velocity patterns"""
-        # info get recent velocity norms
+        """
+        Improved jump detection that accounts for transformer's multi-step changes
+        """
+        # Get recent velocity norms with wider window
         recent_norms = [v[2] for v in self.velocities[-self.jump_detection_window:]]
-        mean_norm = np.mean(recent_norms[:-1])  # info mean of all except current
-        std_norm = np.std(recent_norms[:-1])  # info std of all except current
 
-        # info a jump is detected if velocity is significantly higher than recent history
-        #  using Z-score threshold for detection
-        z_score = (current_velocity_norm - mean_norm) / (std_norm + 1e-8)
+        # Use exponential moving average for smoother baseline
+        if not hasattr(self, 'ema_norm'):
+            self.ema_norm = np.mean(recent_norms[:min(10, len(recent_norms))])
 
-        # info set a minimum absolute threshold as well as a relative threshold
-        # info adjust this based to typical problem velocity
-        # fixme todo grow if there was a jump detected at last step (in detection window[-1]?)
-        #  how to decrease it then? Perhaps decrease if in the current there is no jump then set to minimum (or standard) value?
-        minimum_velocity_threshold = 0.5
+        # Update EMA (alpha=0.9 for strong smoothing)
+        self.ema_norm = 0.9 * self.ema_norm + 0.1 * current_velocity_norm
 
-        # info check both relative significance (z-score) AND absolute magnitude
-        is_jump = (z_score > self.jump_threshold) and (current_velocity_norm > minimum_velocity_threshold)
+        # Calculate robust statistics
+        median_norm = np.median(recent_norms[:-1])  # Median is more robust than mean
+        q75 = np.percentile(recent_norms[:-1], 75)
+        q25 = np.percentile(recent_norms[:-1], 25)
+        iqr = q75 - q25  # Interquartile range for robust variability measure
 
-        # info mpose minimum distance between detected jumps (at least 5 epochs)
+        # Calculate robust z-score using median and IQR
+        robust_z_score = (current_velocity_norm - median_norm) / (
+                iqr + 1e-8) * 0.7413  # Scale to approximate standard z-score
+
+        # Define minimum velocity threshold based on model size
+        model_size = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        size_factor = np.log10(model_size) / 6.0  # Normalize by log of parameter count
+        minimum_velocity_threshold = 0.3 * size_factor  # Scale threshold by model size
+
+        # Multi-level jump detection:
+        jump_threshold_multiplier_strong = 1.25  # 1.5
+        jump_threshold_multiplier_medium = 0.7 * 3.0 / 5.0  # 0.7
+        minimum_velocity_threshold_multiplier = 2.0 * (3.0 / 5.0)  # 2.0
+        # 1. Strong jumps: High z-score and absolute magnitude
+        is_strong_jump = ((robust_z_score > self.jump_threshold * jump_threshold_multiplier_strong)
+                          and (current_velocity_norm > minimum_velocity_threshold * minimum_velocity_threshold_multiplier))
+
+        # 2. Medium jumps: Moderate z-score sustained over multiple steps
+        if hasattr(self, 'sustained_counter') and self.sustained_counter > 0:
+            self.sustained_counter -= 1
+            is_medium_jump = (robust_z_score > self.jump_threshold * jump_threshold_multiplier_medium) and self.sustained_counter == 0
+        else:
+            self.sustained_counter = 0
+            is_medium_jump = False
+
+        if robust_z_score > self.jump_threshold * jump_threshold_multiplier_medium and self.sustained_counter == 0:
+            self.sustained_counter = 3  # Count 3 consecutive epochs with elevated velocity
+
+        # 3. Gradual jumps: Consistent deviation from baseline
+        if not hasattr(self, 'cumulative_deviation'):
+            self.cumulative_deviation = 0.0
+
+        # Update cumulative deviation from EMA baseline
+        deviation = current_velocity_norm - self.ema_norm
+        self.cumulative_deviation = jump_threshold_multiplier_medium * self.cumulative_deviation + 0.3 * deviation
+
+        # Detect gradual jump when cumulative deviation crosses threshold
+        is_gradual_jump = self.cumulative_deviation > minimum_velocity_threshold * 1.5
+
+        # Reset once detected
+        if is_gradual_jump:
+            self.cumulative_deviation = 0.0
+
+        # Combine jump detection criteria
+        is_jump = is_strong_jump or is_medium_jump or is_gradual_jump
+
+        # Enforce minimum distance between detected jumps (increased to 15 epochs)
         if is_jump and self.last_jump_epoch is not None:
-            # todo fixme the same might be done here, but it probably does not work?
-            min_jump_distance = 5
+            min_jump_distance = 15
             if epoch - self.last_jump_epoch < min_jump_distance:
                 is_jump = False  # Too close to the last jump, ignore
 
-        # info add an additional filter to avoid detecting jumps when velocity is consistently low
-        if is_jump and mean_norm < 0.1 and current_velocity_norm < 0.5:  # Adjust thresholds as needed
-            is_jump = False  # Likely noise, not a significant jump
-
         if is_jump:
-            # info update last jump epoch
+            # Tag the type of jump detected
+            jump_type = "strong" if is_strong_jump else "medium" if is_medium_jump else "gradual"
+
+            # Update last jump epoch
             self.last_jump_epoch = epoch
 
             # info mark this epoch as a jump point
             self.detected_jumps.append({
                 'epoch': epoch,
+                'jump_type': jump_type,
                 'velocity_norm': current_velocity_norm,
-                'z_score': z_score,
-                'mean_norm': mean_norm,
-                'std_norm': std_norm
+                'z_score': robust_z_score,
+                'median_norm': median_norm,
+                'iqr': iqr,
+                'cumulative_deviation': getattr(self, 'cumulative_deviation', 0.0)
             })
 
             # info log the jump
             if self.logger:
                 self.logger.log_data('weight_space_jumps', 'jump_epochs', epoch)
                 self.logger.log_data('weight_space_jumps', 'jump_velocity_norms', current_velocity_norm)
-                self.logger.log_data('weight_space_jumps', 'jump_z_scores', z_score)
+                self.logger.log_data('weight_space_jumps', 'jump_z_scores', robust_z_score)
+                self.logger.log_data('weight_space_jumps', 'jump_types', jump_type)
 
             return True
 
@@ -692,6 +1079,7 @@ class EnhancedWeightSpaceTracker:
             ax.set_ylabel(f'PCA Dimension 2 ({self.pca.explained_variance_ratio_[1]:.2%} var)')
             ax.set_title(f'Weight Space Trajectory Around Jump at Epoch {jump_epoch}')
 
+            # fig.suptitle(f"{self.model.plot_prefix}")
             # Save the figure
             plt.tight_layout()
             fig.savefig(self.jump_dir / f"{jump_id}_pca_trajectory.png")
@@ -701,17 +1089,70 @@ class EnhancedWeightSpaceTracker:
             self._visualize_layer_changes(jump_id)
 
     def visualize_jump_characterization(self, jump_char, save_prefix=None):
-        """Create visualizations of jump characterization"""
+        """Enhanced visualization of jump characterization with structural changes"""
         import matplotlib.pyplot as plt
         import seaborn as sns
         import pandas as pd
 
-        # info create directory for visualizations
+        # Create directory for visualizations
         viz_dir = self.save_dir / "jump_characterization"
         viz_dir.mkdir(exist_ok=True, parents=True)
 
-        # info file name prefix (based on jump epoch)
+        # File name prefix (based on jump epoch)
         prefix = save_prefix or f"jump_{jump_char['jump_epoch']}"
+
+        # Add SVD-based structural change visualization
+        if 'svd_changes' in jump_char and jump_char['svd_changes']:
+            fig_svd, ax_svd = plt.subplots(figsize=(12, 8))
+
+            # Extract structural changes
+            svd_data = []
+            for name, changes in jump_char['svd_changes'].items():
+                # Simplify parameter name for display
+                short_name = name.split('.')[-2] + '.' + name.split('.')[-1]
+                if len(short_name) > 20:
+                    short_name = short_name[:18] + '..'
+
+                svd_data.append({
+                    'Parameter': short_name,
+                    'Singular Value Change': changes['singular_value_change'],
+                    'Direction Change': changes['direction_change']
+                })
+
+            svd_df = pd.DataFrame(svd_data)
+
+            # Sort by total change
+            svd_df['Total Change'] = svd_df['Singular Value Change'] + svd_df['Direction Change']
+            svd_df = svd_df.sort_values('Total Change', ascending=False).head(15)  # Top 15 parameters
+
+            # Plot as grouped bar chart
+            svd_melted = pd.melt(
+                svd_df,
+                id_vars=['Parameter'],
+                value_vars=['Singular Value Change', 'Direction Change'],
+                var_name='Change Type',
+                value_name='Magnitude'
+            )
+
+            # Create grouped bar plot
+            sns.barplot(
+                data=svd_melted,
+                x='Parameter',
+                y='Magnitude',
+                hue='Change Type',
+                ax=ax_svd
+            )
+
+            ax_svd.set_title(f"Structural Changes at Jump {jump_char['jump_epoch']} ({jump_char['jump_type']} jump)\t{self.model.plot_prefix}")
+            ax_svd.set_xlabel('Parameter')
+            ax_svd.set_ylabel('Change Magnitude')
+            ax_svd.set_xticklabels(ax_svd.get_xticklabels(), rotation=45, ha='right')
+
+            plt.tight_layout()
+            plt.savefig(viz_dir / f"{prefix}_structural_changes.png")
+            plt.close(fig_svd)
+
+        ###############################################################################################
 
         # info 1. component Change Visualization
         fig1, ax1 = plt.subplots(figsize=(12, 6))
@@ -752,6 +1193,7 @@ class EnhancedWeightSpaceTracker:
         ax1.set_ylabel('Change Magnitude')
         ax1.set_xticklabels(ax1.get_xticklabels(), rotation=45, ha='right')
 
+        fig1.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         plt.savefig(viz_dir / f"{prefix}_component_changes.png")
         plt.close(fig1)
@@ -817,6 +1259,7 @@ class EnhancedWeightSpaceTracker:
         ax3.set_ylabel('Change Magnitude')
         ax3.set_xticklabels(ax3.get_xticklabels(), rotation=45, ha='right')
 
+        fig2.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         plt.savefig(viz_dir / f"{prefix}_layer_head_changes.png")
         plt.close(fig2)
@@ -848,10 +1291,47 @@ class EnhancedWeightSpaceTracker:
                 ax4.set_ylabel('Change Value')
                 ax4.set_xticklabels(ax4.get_xticklabels(), rotation=45, ha='right')
 
+                fig3.suptitle(f"{self.model.plot_prefix}")
                 plt.tight_layout()
                 plt.savefig(viz_dir / f"{prefix}_spectral_changes.png")
 
             plt.close(fig3)
+        ###############################################################################################################
+        # Add a new visualization for size-normalized changes
+        if any('size_normalized_change' in changes for changes in jump_char['layer_changes'].values()):
+            fig_size, ax_size = plt.subplots(figsize=(10, 6))
+
+            # Extract data
+            size_data = []
+            for layer, changes in jump_char['layer_changes'].items():
+                if 'size_normalized_change' in changes:
+                    size_data.append({
+                        'Layer': layer,
+                        'Size-Normalized Change': changes['size_normalized_change']
+                    })
+
+            if size_data:
+                size_df = pd.DataFrame(size_data)
+
+                # Sort by normalized change
+                size_df = size_df.sort_values('Size-Normalized Change', ascending=False)
+
+                # Plot bar chart
+                sns.barplot(
+                    data=size_df,
+                    x='Layer',
+                    y='Size-Normalized Change',
+                    ax=ax_size
+                )
+
+                ax_size.set_title(f"Parameter Size-Normalized Changes at Jump {jump_char['jump_epoch']}")
+                ax_size.set_xlabel('Layer')
+                ax_size.set_ylabel('Size-Normalized Change')
+
+                fig_size.suptitle(f"{self.model.plot_prefix}")
+                plt.tight_layout()
+                plt.savefig(viz_dir / f"{prefix}_size_normalized_changes.png")
+                plt.close(fig_size)
 
         return viz_dir
 
@@ -896,6 +1376,7 @@ class EnhancedWeightSpaceTracker:
         ax2.legend()
 
         # Save the figure
+        fig.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         fig.savefig(self.jump_dir / f"{jump_id}_layer_changes.png")
         plt.close(fig)
@@ -1200,7 +1681,7 @@ class EnhancedWeightSpaceTracker:
             self.label_height += self.label_height_shift
             if self.label_height > 1. - self.label_height_shift:
                 self.label_height = self.label_height_shift
-            ax1.axvline(x=jump['epoch'], color='red', linestyle='--',  lw=1.25, alpha=0.7)
+            ax1.axvline(x=jump['epoch'], color='red', linestyle='--', lw=1.25, alpha=0.7)
             ax1.text(jump['epoch'], self.label_height, f"{int(jump['epoch'])}", rotation=90, alpha=0.9)
 
         ax1.set_title('Accuracy and Weight Space Jumps')
@@ -1220,6 +1701,7 @@ class EnhancedWeightSpaceTracker:
         ax2.set_ylabel('Velocity Norm')
         ax2.set_title('Weight Space Velocities and Detected Jumps')
 
+        fig.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         fig.savefig(self.save_dir / f"weight_space_jumps_timeline.png")
         plt.close(fig)
@@ -1287,7 +1769,7 @@ class EnhancedWeightSpaceTracker:
                             ax1.text(
                                 trajectory[idx, selected_dims[0]] + off_x,
                                 trajectory[idx, selected_dims[1]] + off_y,
-                                f'Epoch {epoch}', fontsize=9
+                                f'epoch {epoch}', fontsize=9
                             )
             elif isinstance(highlight_epochs, dict):
                 for key, vals in highlight_epochs.items():
@@ -1301,7 +1783,7 @@ class EnhancedWeightSpaceTracker:
                                     trajectory[idx, selected_dims[1]],
                                     color, markersize=10, alpha=0.7
                                 )
-                                label = f'Grok {epoch}' if key == 'grok' else f'{epoch}'
+                                label = f'grok {epoch}' if key == 'grok' else f'{epoch}'
                                 off_x, off_y = offsets[np.random.randint(len(offsets))]
                                 ax1.text(
                                     trajectory[idx, selected_dims[0]] + off_x,
@@ -1345,8 +1827,9 @@ class EnhancedWeightSpaceTracker:
             for epoch in jump_epochs:
                 ax2.axvline(x=epoch, color='purple', linestyle='--', lw=1.0, alpha=0.5)
 
-            ax2.set_title(f'Weight Space Velocity and Acceleration: {self.model.plot_prefix}')
+            ax2.set_title(f'Weight Space Velocity and Acceleration')
 
+        fig.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         save_path = self.save_dir / f'weight_trajectory_with_jumps_dims_{selected_dims[0]}_{selected_dims[1]}.png'
         plt.savefig(save_path)

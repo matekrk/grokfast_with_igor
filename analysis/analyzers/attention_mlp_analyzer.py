@@ -34,6 +34,10 @@ class AttentionMLPAnalyzer:
         self.save_dir = Path(save_dir) if save_dir else Path("analysis_results")
         self.save_dir.mkdir(exist_ok=True, parents=True)
 
+        # info heatmap min/max values
+        self.heatmap_min = 0.0
+        self.heatmap_max = 0.65
+
     def collect_activations(self, num_batches=3):
         """
         Collect activations from attention heads and MLPs.
@@ -363,7 +367,8 @@ class AttentionMLPAnalyzer:
                 activation_flow[layer_key]['cross_correlation_matrix'],
                 cmap='coolwarm',
                 center=0,
-                ax=corr_axes[layer_idx]
+                ax=corr_axes[layer_idx],
+                vmin=self.heatmap_min, vmax=self.heatmap_max,
             )
             corr_axes[layer_idx].set_title(f'Layer {layer_idx} Attention-MLP Correlation')
             corr_axes[layer_idx].set_xlabel('MLP Input Dimension')
@@ -500,7 +505,8 @@ class AttentionMLPAnalyzer:
                 sns.heatmap(
                     mean_pattern,
                     cmap='viridis',
-                    ax=pattern_vis_axes[layer_idx, head_idx]
+                    ax=pattern_vis_axes[layer_idx, head_idx],
+                    vmin=self.heatmap_min, vmax=self.heatmap_max,
                 )
                 pattern_vis_axes[layer_idx, head_idx].set_title(f'Layer {layer_idx}, Head {head_idx}')
 
@@ -700,7 +706,8 @@ class AttentionMLPAnalyzer:
             code_corr,
             cmap='coolwarm',
             center=0,
-            ax=code_ax
+            ax=code_ax,
+            vmin=self.heatmap_min, vmax=self.heatmap_max,
         )
         code_ax.set_title(f'{component.upper()} Layer {layer_idx} Feature Correlations')
 
@@ -956,7 +963,8 @@ class AttentionMLPAnalyzer:
                         mean_pattern,
                         cmap='viridis',
                         ax=pattern_axes[ax_idx, head_idx],
-                        cbar=False
+                        cbar=False,
+                        vmin=self.heatmap_min, vmax=self.heatmap_max,
                     )
                     pattern_axes[ax_idx, head_idx].set_title(f'{phase_name}: L{layer_idx}, H{head_idx}')
                     # Remove x and y labels for cleaner look
@@ -1317,7 +1325,10 @@ class AttentionMLPAnalyzer:
                         for i, (head_key, pattern_data) in enumerate(patterns.items()):
                             if i < len(axes):
                                 mean_pattern = pattern_data['mean_pattern']
-                                sns.heatmap(mean_pattern, ax=axes[i], cmap='viridis')
+                                if len(mean_pattern.shape) == 1:
+                                    mean_pattern_2d = mean_pattern.reshape(1, -1)
+                                sns.heatmap(mean_pattern_2d, ax=axes[i], cmap='viridis',
+                                            vmin=self.heatmap_min, vmax=self.heatmap_max,)
                                 axes[i].set_title(f"{head_key}\nEntropy: {pattern_data['entropy']:.3f}")
 
                         # Hide unused axes
@@ -1664,7 +1675,7 @@ class AttentionMLPAnalyzer:
                 plt.figure(figsize=(10, 8))
                 sns.heatmap(interaction_matrix, annot=True, fmt=".3f",
                             xticklabels=unique_comps, yticklabels=unique_comps,
-                            cmap='coolwarm', center=0)
+                            cmap='coolwarm', center=0, vmin=self.heatmap_min, vmax=self.heatmap_max,)
 
                 plt.title(f'Pairwise Component Interactions at Jump {jump_epoch}')
                 plt.tight_layout()

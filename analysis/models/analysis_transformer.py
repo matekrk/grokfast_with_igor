@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import defaultdict
 
-from logger import DataLogger
+from analysis.core.logger import DataLogger
 
 
 class Block(nn.Module):

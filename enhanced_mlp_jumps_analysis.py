@@ -1,12 +1,11 @@
 import torch
 import numpy as np
-from pathlib import Path
 
 # Import the enhanced weight tracker and jump analysis tools
-from enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
+from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
 from grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
 from jump_analysis_tools import JumpAnalysisTools
-from utils import init_train_dataloader_state, FittingScore
+from analysis.utils.utils import init_train_dataloader_state, FittingScore
 
 
 def train_with_enhanced_jumps_analysis(model, train_loader, eval_loader,

@@ -1,20 +1,9 @@
-import argparse
-from datetime import datetime
-from pathlib import Path
-
-import torch
-import torch.nn as nn
-from torch import optim
 from tqdm import tqdm
 
-from analysis_transformer import Decoder
-from checkpoint_manager import GrokAwareCheckpointManager
-from enhanced_analysis import train_with_enhanced_analysis
 from grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
-from modular_data import create_modular_dataloaders
 from track_gradients import WeightSpaceTracker, CyclicBehaviorDetector, analyze_gradient_flow, analyze_loss_curvature
-from utils import init_train_dataloader_state, init_val_dataloader_state
-from visualization import visualize_model_analysis
+from analysis.utils.utils import init_train_dataloader_state, init_val_dataloader_state
+from analysis.visualization import visualize_model_analysis
 
 
 # Import the enhanced weight tracker and jump analysis tools

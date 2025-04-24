@@ -4,24 +4,21 @@ Script for analyzing a transformer model around the grokking transition point
 using fine-grained resumption and the Attention-MLP Analyzer framework.
 """
 
-import os
 import argparse
 import torch
 from pathlib import Path
-import matplotlib.pyplot as plt
 import pandas as pd
 
 # Import your existing modules
-from analysis_transformer import Decoder
-from checkpoint_manager import CheckpointManager
+from analysis.models.analysis_transformer import Decoder
 from grokking_detection import detect_grokking_multi_metric
-from modular_data import create_modular_dataloaders
+from analysis.models.modular_data import create_modular_dataloaders
 
 # Import the resume training function we created earlier
 from resume_analysis import resume_training_around_grokking
 
 # Import our analyzer class (assuming it's in a file called attention_mlp_analyzer.py)
-from attention_mlp_analyzer import AttentionMLPAnalyzer, SparseAutoencoder
+from analysis.analyzers.attention_mlp_analyzer import AttentionMLPAnalyzer, SparseAutoencoder
 
 
 def identify_grokking_checkpoint(model_dir):

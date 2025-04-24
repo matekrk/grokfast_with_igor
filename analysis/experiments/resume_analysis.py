@@ -4,11 +4,11 @@ import os
 import torch
 from pathlib import Path
 
-from analysis_transformer import Decoder
-from checkpoint_manager import CheckpointManager
+from analysis.models.analysis_transformer import Decoder
+from analysis.utils.checkpoint_manager import CheckpointManager
 from grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
-from modular_data import create_modular_dataloaders
-from visualization import visualize_model_analysis
+from analysis.models.modular_data import create_modular_dataloaders
+from analysis.visualization import visualize_model_analysis
 
 
 def resume_training_around_grokking(
@@ -156,10 +156,10 @@ def resume_training_around_grokking(
         optimizer=optimizer,
         scheduler=scheduler,
         experiment_name=model.get_id(),
-        base_dir="results",
+        base_dir="../../results",
         save_dir=model.save_dir,
         checkpoint_dir=model.checkpoint_dir,
-        stats_dir="stats",
+        stats_dir="../../stats",
         save_freq=1,  # Save every epoch for fine-grained analysis
         max_to_keep=25
     )
@@ -199,7 +199,6 @@ def continue_training_with_analysis(
     adapted for resuming training with epoch-by-epoch granularity.
     """
     from tqdm import tqdm
-    import numpy as np
 
     end_epoch = start_epoch + num_epochs
 

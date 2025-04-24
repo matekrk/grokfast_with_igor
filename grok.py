@@ -2,28 +2,17 @@ import math
 import sys
 from argparse import ArgumentParser
 from datetime import datetime
-import numpy as np
-from itertools import permutations
-import copy
 
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from matplotlib.pyplot import xscale
-from torchmetrics import Accuracy
-from torchmetrics.classification import BinaryAccuracy, MulticlassAccuracy
+from torchmetrics.classification import MulticlassAccuracy
 from torchmetrics.functional.classification import multiclass_accuracy
 # from torcheval.metrics import BinaryAccuracy
-from tqdm import tqdm, trange
-import seaborn as sns
+from tqdm import tqdm
 
 import torch
-from torch import device
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
-from logger import DataLogger
-from analyze import get_parameter_norms, get_detailed_joined_attn_norms, get_detailed_norms
+from analysis.core.logger import DataLogger
+from analyze import get_parameter_norms, get_detailed_joined_attn_norms
 from plot import plot_dicts
 
 

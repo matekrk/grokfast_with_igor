@@ -2,10 +2,9 @@ import argparse
 import torch
 from pathlib import Path
 
-from analysis_transformer import Decoder
-from checkpoint_manager import CheckpointManager
-from visualization import visualize_model_analysis
-from modular_data import create_modular_dataloaders
+from analysis.models.analysis_transformer import Decoder
+from analysis.visualization import visualize_model_analysis
+from analysis.models.modular_data import create_modular_dataloaders
 
 
 def analyze_model_checkpoints(checkpoint_dir, output_dir, modulus=97, op='multiply', epochs=None):
