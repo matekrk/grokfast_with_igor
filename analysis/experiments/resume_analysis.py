@@ -6,7 +6,7 @@ from pathlib import Path
 
 from analysis.models.analysis_transformer import Decoder
 from analysis.utils.checkpoint_manager import CheckpointManager
-from grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
+from analysis.analyzers.grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
 from analysis.models.modular_data import create_modular_dataloaders
 from analysis.visualization import visualize_model_analysis
 

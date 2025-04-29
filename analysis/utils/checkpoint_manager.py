@@ -1,11 +1,14 @@
-import os
 import json
-import torch
-import numpy as np
+import os
 import random
 import time
 from datetime import datetime
 from pathlib import Path
+
+import numpy as np
+import torch
+
+from analysis.utils.utils import save_clean_json
 
 
 class CheckpointManager:
@@ -20,9 +23,9 @@ class CheckpointManager:
                  scheduler=None,
                  experiment_name=None,
                  base_dir="results",
-                 save_dir = "results",
-                 checkpoint_dir = "checkpoints",
-                 stats_dir = "stats",
+                 save_dir="results",
+                 checkpoint_dir="checkpoints",
+                 stats_dir="stats",
                  save_freq=200,
                  max_to_keep=5):
         """
@@ -99,8 +102,9 @@ class CheckpointManager:
         }
 
         # Save metadata
-        with open(self.experiment_dir / "metadata.json", "w") as f:
-            json.dump(metadata, f, indent=4)
+        # with open(self.experiment_dir / "metadata.json", "w") as f:
+        save_clean_json(metadata, self.experiment_dir / "metadata.json")
+        # json.dump(metadata, f, indent=4)
 
     def save_checkpoint(self, epoch,
                         train_dataloader_state=None,
@@ -171,19 +175,17 @@ class CheckpointManager:
         if extra_data is not None:
             state_info["extra_data"] = extra_data
 
-        # Save the model checkpoint
-        torch.save(checkpoint, model_path)
+        if force_save:  # Save the model checkpoint
+            torch.save(checkpoint, model_path)
 
         # Save the state info as JSON
-        with open(state_path, "w") as f:
-            json.dump(state_info, f, indent=4)
+        save_clean_json(state_info, state_path)
 
         # Update checkpoint file list
         self.checkpoint_files.append((model_path, state_path, split_indices_path))
 
         # Manage maximum checkpoints to keep
         self._manage_checkpoint_retention()
-
 
         # Add dataloader states if provided
         if train_dataloader_state is not None:
@@ -195,18 +197,17 @@ class CheckpointManager:
         # Save dataset split indices if provided
         if dataset_split_indices is not None:
             split_indices_path = self.checkpoint_dir / f"{checkpoint_name}_split_indices.json"
-            with open(split_indices_path, "w") as f:
-                json.dump(dataset_split_indices, f, indent=4)
+            save_clean_json(dataset_split_indices, split_indices_path)
             # torch.save(dataset_split_indices, split_indices_path)
 
             state_info["dataset_split_indices_file"] = str(split_indices_path)
             # Save the state info as JSON
-            with open(state_path, "w") as f:
-                json.dump(state_info, f, indent=4)
+            # with open(state_path, "w") as f:
+            save_clean_json(state_info, state_path)
 
         # Save the state info as JSON
-        with open(state_path, "w") as f:
-            json.dump(state_info, f, indent=4)
+        # with open(state_path, "w") as f:
+        save_clean_json(state_info, state_path)
 
         print(f"\tCheckpoint saved at epoch {epoch}")
 
@@ -253,20 +254,23 @@ class CheckpointManager:
                     if isinstance(value[0], np.ndarray):
                         serializable_stats[key] = [v.tolist() for v in value]
 
-            json.dump(serializable_stats, f, indent=4)
+            save_clean_json(serializable_stats, stats_path)
 
     def _manage_checkpoint_retention(self):
         """Manage the number of checkpoints to keep"""
         if len(self.checkpoint_files) > self.max_to_keep:
-            # Remove the oldest checkpoints
+            # info remove the oldest checkpoints
             num_to_remove = len(self.checkpoint_files) - self.max_to_keep
             for i in range(num_to_remove):
                 model_path, state_path, split_indices_path = self.checkpoint_files.pop(0)
 
                 # Remove the files if they exist
-                model_path = Path(model_path); model_path.unlink(missing_ok=True)
-                state_path = Path(state_path); state_path.unlink(missing_ok=True)
-                split_indices_path = Path(split_indices_path); split_indices_path.unlink(missing_ok=True)
+                model_path = Path(model_path);
+                model_path.unlink(missing_ok=True)
+                state_path = Path(state_path);
+                state_path.unlink(missing_ok=True)
+                split_indices_path = Path(split_indices_path);
+                split_indices_path.unlink(missing_ok=True)
 
     def load_checkpoint(self, checkpoint_path=None, step=None):
         """
@@ -361,8 +365,9 @@ class CheckpointManager:
             else:
                 serializable_scores[head] = score
 
-        with open(file_path, "w") as f:
-            json.dump(serializable_scores, f, indent=4)
+        # with open(file_path, "w") as f:
+        save_clean_json(serializable_scores, file_path)
+        # json.dump(serializable_scores, f, indent=4)
 
         return file_path
 
@@ -414,8 +419,9 @@ class CheckpointManager:
         serializable_ind = {k: float(v) if isinstance(v, (torch.Tensor, np.ndarray)) else v
                             for k, v in individual_results.items()}
 
-        with open(ind_file_path, "w") as f:
-            json.dump(serializable_ind, f, indent=4)
+        # with open(ind_file_path, "w") as f:
+        save_clean_json(serializable_ind, ind_file_path)
+        # json.dump(serializable_ind, f, indent=4)
 
         # Save pairwise results
         pair_file_path = circuit_dir / f"pairwise_ablation_step_{epoch}.json"
@@ -429,8 +435,9 @@ class CheckpointManager:
                 for k, v in results.items()
             }
 
-        with open(pair_file_path, "w") as f:
-            json.dump(serializable_pair, f, indent=4)
+        # with open(pair_file_path, "w") as f:
+        save_clean_json(serializable_pair, pair_file_path)
+        # json.dump(serializable_pair, f, indent=4)
 
         return ind_file_path, pair_file_path
 
@@ -521,9 +528,12 @@ class GrokAwareCheckpointManager(CheckpointManager):
             idx, model_path, state_path, split_indices_path = removable[i]
 
             # Remove the files if they exist
-            model_path = Path(model_path); model_path.unlink(missing_ok=True)
-            state_path = Path(state_path); state_path.unlink(missing_ok=True)
-            split_indices_path = Path(split_indices_path); split_indices_path.unlink(missing_ok=True)
+            model_path = Path(model_path);
+            model_path.unlink(missing_ok=True)
+            state_path = Path(state_path);
+            state_path.unlink(missing_ok=True)
+            split_indices_path = Path(split_indices_path);
+            split_indices_path.unlink(missing_ok=True)
 
             # Remove from our tracking list
             self.checkpoint_files.pop(removable[i][0] - i)  # Adjust index as we remove items

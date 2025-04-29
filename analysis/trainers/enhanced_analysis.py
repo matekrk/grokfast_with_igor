@@ -6,10 +6,10 @@ import torch
 from analysis.analyzers.attention_mlp_analyzer import AttentionMLPAnalyzer
 # Import the enhanced weight tracker and jump analysis tools
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
+from analysis.analyzers.grokking_detection import analyze_grokking_transitions
 from analysis.analyzers.jump_analysis_manager import JumpAnalysisManager
+from analysis.analyzers.jump_analysis_tools import JumpAnalysisTools
 from analysis.utils.utils import init_train_dataloader_state, FittingScore
-from grokking_detection import analyze_grokking_transitions
-from jump_analysis_tools import JumpAnalysisTools
 
 
 def get_force_snapshot(method, epoch, analyze_interval, min_epoch_for_detection, weight_tracker=None):
@@ -159,7 +159,7 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
 
     # fixme either log_interval = k * snapshot_frequency, or snapshot_frequency = k * log_interval;
     #  which is better? probably snapshot_frequency = k * log_interval, so that snapshots are taken
-    #  at regular inetrvals, but not too frequently
+    #  at regular inetrvals, but not too frequently warning NOOOO! snap_freq = analyze_interv // 2
     snapshot_frequency = 2 * log_interval
     sliding_window_size = 20
     # info initialize the enhanced weight space tracker with sliding window
@@ -363,10 +363,13 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
         if epoch % checkpoint_interval == 0 or epoch == epochs - 1:
             checkpointManager.save_checkpoint(
                 epoch=epoch + 1,
-                train_dataloader_state=train_dataloader_state, eval_dataloader_state=eval_dataloader_state,
+                train_dataloader_state=train_dataloader_state,
+                eval_dataloader_state=eval_dataloader_state,
                 dataset_split_indices=dataset_split_indices,
-                train_loss=train_loss, train_accuracy=train_accuracy,
-                val_loss=eval_loss, val_accuracy=eval_accuracy
+                train_loss=train_loss,
+                train_accuracy=train_accuracy,
+                val_loss=eval_loss,
+                val_accuracy=eval_accuracy
             )
 
     # info final analysis at the end of training

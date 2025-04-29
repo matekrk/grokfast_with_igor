@@ -15,6 +15,7 @@ async def remove_files_async(file_list):
             lambda: [os.remove(f) for f in file_list if os.path.exists(f)]
         )
 
+
 ### info to execute
 # file_list = [f"checkpoint_{i}.pth" for i in range(100)]
 # asyncio.run(remove_files_async(file_list))
@@ -43,6 +44,7 @@ def get_sampler_iter_state(dataloader):
     # For SequentialSampler, we don't need state
     return None
 
+
 def init_train_dataloader_state(dataloader):
     return {
         # Current position information
@@ -58,6 +60,7 @@ def init_train_dataloader_state(dataloader):
         'drop_last': dataloader.drop_last
     }
 
+
 def init_val_dataloader_state(dataloader):
     return {
         # Similar structure but typically simpler since evaluation is often sequential
@@ -69,6 +72,44 @@ def init_val_dataloader_state(dataloader):
         'pin_memory': dataloader.pin_memory,
         'drop_last': dataloader.drop_last
     }
+
+
+import json
+
+
+def clean_for_json(obj):
+    """
+    Recursively clean a Python object by removing or replacing elements
+    that are not JSON serializable.
+    """
+    if isinstance(obj, dict):
+        return {k: clean_for_json(v) for k, v in obj.items() if is_json_serializable(k)}
+    elif isinstance(obj, list):
+        return [clean_for_json(item) for item in obj if is_json_serializable(item)]
+    elif is_json_serializable(obj):
+        return obj
+    else:
+        # Replace with string representation, None, or exclude
+        return str(obj)  # or return None, or other default value
+
+
+def is_json_serializable(obj):
+    """
+    Check if an object is JSON serializable.
+    """
+    try:
+        json.dumps(obj)
+        return True
+    except (TypeError, OverflowError):
+        return False
+
+
+# Example usage
+def save_clean_json(data, filename):
+    cleaned_data = clean_for_json(data)
+    with open(filename, 'w') as f:
+        json.dump(cleaned_data, f, indent=4)
+
 
 class FittingScore:
     def __init__(self):

@@ -36,7 +36,7 @@ class EnhancedTrainer(BaseTrainer):
             self.weight_tracker = weight_tracker
 
         if jump_analyzer is None:
-            from jump_analysis_tools import JumpAnalysisTools
+            from analysis.analyzers.jump_analysis_tools import JumpAnalysisTools
             self.jump_analyzer = JumpAnalysisTools(
                 model=model,
                 save_dir=checkpoint_manager.checkpoint_dir,
@@ -123,7 +123,7 @@ class EnhancedTrainer(BaseTrainer):
 
     def _track_grokking_metrics(self, epoch):
         """Track metrics for grokking detection"""
-        from grokking_detection import track_metrics_for_grokking
+        from analysis.analyzers.grokking_detection import track_metrics_for_grokking
         track_metrics_for_grokking(
             epoch=epoch,
             model=self.model,
@@ -207,7 +207,7 @@ class EnhancedTrainer(BaseTrainer):
         )
 
         # Check for grokking transitions
-        from grokking_detection import analyze_grokking_transitions
+        from analysis.analyzers.grokking_detection import analyze_grokking_transitions
         grokking_analysis = analyze_grokking_transitions(
             model=self.model,
             train_loader=self.train_loader,

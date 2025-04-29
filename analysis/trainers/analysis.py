@@ -1,6 +1,6 @@
 from tqdm import tqdm
 
-from grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
+from analysis.analyzers.grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
 from track_gradients import WeightSpaceTracker, CyclicBehaviorDetector, analyze_gradient_flow, analyze_loss_curvature
 from analysis.utils.utils import init_train_dataloader_state, init_val_dataloader_state
 from analysis.visualization import visualize_model_analysis

@@ -3,8 +3,8 @@ import numpy as np
 
 # Import the enhanced weight tracker and jump analysis tools
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
-from grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
-from jump_analysis_tools import JumpAnalysisTools
+from analysis.analyzers.grokking_detection import track_metrics_for_grokking, analyze_grokking_transitions
+from analysis.analyzers.jump_analysis_tools import JumpAnalysisTools
 from analysis.utils.utils import init_train_dataloader_state, FittingScore
 
 

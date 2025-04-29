@@ -8,8 +8,6 @@ import seaborn as sns
 import torch
 from sklearn.decomposition import PCA
 
-from analysis.core.weight_space import WeightSpaceTracker
-
 
 # todo let EnhancedWeightSpaceTracker inherit from analysis.core.weight_space.WeightSpaceTracker
 class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
@@ -19,12 +17,12 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                  sliding_window_size=5, dense_sampling=True, jump_detection_window=100,
                  jump_threshold=1.0):
         # info initialization code...
-                                                                    # info is in base
-        self.model = model                                          # fixme yes
-        self.save_dir = Path(save_dir)                              # fixme yes
+        # info is in base
+        self.model = model  # fixme yes
+        self.save_dir = Path(save_dir)  # fixme yes
         self.save_dir.mkdir(exist_ok=True, parents=True)
 
-        self.pca_components = pca_components                        # fixme yes
+        self.pca_components = pca_components  # fixme yes
         self.snapshot_freq = snapshot_freq
         self.jump_detection_window = jump_detection_window
         self.jump_threshold = jump_threshold
@@ -37,11 +35,11 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         # info storage for weight snapshots and trajectories
         self.weight_snapshots = []
         self.weight_timestamps = []
-        self.flattened_weights = []                                 # fixme yes
+        self.flattened_weights = []  # fixme yes
         self.velocities = []
         self.accelerations = []
-        self.pca = None                                             # fixme yes
-        self.pca_fitted = False                                     # fixme yes
+        self.pca = None  # fixme yes
+        self.pca_fitted = False  # fixme yes
 
         # todo perhaps it would be better to track ALL the snapshots, but then remove these that were NOT used?
 
@@ -117,8 +115,8 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
 
         if should_add_to_window:
             # info store state in sliding window
-            # state_dict = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
-            self.recent_snapshots.append((epoch, current_state_dict, flattened_vector))
+            saved_state_dict = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+            self.recent_snapshots.append((epoch, saved_state_dict, flattened_vector))
 
             # info maintain window size
             while len(self.recent_snapshots) > self.sliding_window_size:
@@ -165,7 +163,8 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                             'pre_jump_state': pre_jump_state,
                             'pre_jump_vector': pre_jump_vector
                         })
-                    print([np.linalg.norm(self.flattened_weights[-k-1]-self.flattened_weights[-k-2]) for k in range(len(self.recent_snapshots)-1)])
+                    print([np.linalg.norm(self.flattened_weights[-k - 1] - self.flattened_weights[-k - 2]) for k in
+                           range(len(self.recent_snapshots) - 1)])
 
         if should_store:
             self.flattened_weights.append(flattened_vector)
@@ -174,7 +173,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
             # info store model state dictionary for later detailed analysis
             self.weight_snapshots.append({
                 'epoch': epoch,
-                'state_dict': {k: v.detach().cpu() for k, v in self.model.state_dict().items()}
+                'state_dict': {k: v.clone().detach().cpu() for k, v in self.model.state_dict().items()}
             })
 
             # info log the snapshot event
@@ -301,7 +300,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         return self.recent_snapshots[best_idx]
 
     def analyze_pending_jumps(self, inputs, targets, criterion, jump_analyzer,
-                              eval_loader = None, optimizer=None, mini_train_steps=10):
+                              eval_loader=None, optimizer=None, mini_train_steps=10):
         """
         Analyze pending jumps with option to briefly train for post-jump state
 
@@ -340,7 +339,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
 
             # info reformat pre_ and jump_ snapshots to {'epoch': int, 'state_dict': {dict: 29}} format
             pre_jump_snapshot = {'epoch': pre_jump_epoch,
-                              'state_dict': pre_jump_snapshot[1]}
+                                 'state_dict': pre_jump_snapshot[1]}
             jump_snapshot = {'epoch': jump_epoch,
                              'state_dict': jump_snapshot[1]}
             # info create true post-jump state using short training
@@ -428,16 +427,18 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
             print(f"Analyzing jump at {jump_epoch} with pre={pre_jump_epoch}, post={post_jump_snapshot['epoch']}")
 
             # info analysis with these snapshots
-            analyzer_result = jump_analyzer.analyze_jump_with_snapshots(
-                jump_epoch=jump_epoch,
-                pre_jump_snapshot=pre_jump_snapshot,
-                jump_snapshot=jump_snapshot,
-                post_jump_snapshot=post_jump_snapshot,
-                inputs=inputs,
-                targets=targets,
-                eval_loader=eval_loader,
-                criterion=criterion
-            )
+            analyzer_result = {}
+            if jump_analyzer is not None:
+                analyzer_result = jump_analyzer.analyze_jump_with_snapshots(
+                    jump_epoch=jump_epoch,
+                    pre_jump_snapshot=pre_jump_snapshot,
+                    jump_snapshot=jump_snapshot,
+                    post_jump_snapshot=post_jump_snapshot,
+                    inputs=inputs,
+                    targets=targets,
+                    eval_loader=eval_loader,
+                    criterion=criterion
+                )
 
             # info combine all the results
             # fixme add 'pre_jump_snapshot', 'jump_snapshot', 'post_jump_snapshot'
@@ -864,12 +865,14 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         minimum_velocity_threshold_multiplier = 2.0 * (3.0 / 5.0)  # 2.0
         # 1. Strong jumps: High z-score and absolute magnitude
         is_strong_jump = ((robust_z_score > self.jump_threshold * jump_threshold_multiplier_strong)
-                          and (current_velocity_norm > minimum_velocity_threshold * minimum_velocity_threshold_multiplier))
+                          and (
+                                      current_velocity_norm > minimum_velocity_threshold * minimum_velocity_threshold_multiplier))
 
         # 2. Medium jumps: Moderate z-score sustained over multiple steps
         if hasattr(self, 'sustained_counter') and self.sustained_counter > 0:
             self.sustained_counter -= 1
-            is_medium_jump = (robust_z_score > self.jump_threshold * jump_threshold_multiplier_medium) and self.sustained_counter == 0
+            is_medium_jump = (
+                                         robust_z_score > self.jump_threshold * jump_threshold_multiplier_medium) and self.sustained_counter == 0
         else:
             self.sustained_counter = 0
             is_medium_jump = False
@@ -1143,7 +1146,8 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                 ax=ax_svd
             )
 
-            ax_svd.set_title(f"Structural Changes at Jump {jump_char['jump_epoch']} ({jump_char['jump_type']} jump)\t{self.model.plot_prefix}")
+            ax_svd.set_title(
+                f"Structural Changes at Jump {jump_char['jump_epoch']} ({jump_char['jump_type']} jump)\t{self.model.plot_prefix}")
             ax_svd.set_xlabel('Parameter')
             ax_svd.set_ylabel('Change Magnitude')
             ax_svd.set_xticklabels(ax_svd.get_xticklabels(), rotation=45, ha='right')
@@ -1836,3 +1840,445 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         plt.close()
 
         return save_path
+
+    def analyze_phase_weight_spaces(self, phase_analyzer, eval_loader=None, n_components=3):
+        """
+        Analyze weight spaces at key phase transition points using PCA/SVD.
+
+        Args:
+            phase_analyzer: PhaseTransitionAnalyzer containing phase information
+            eval_loader: Optional evaluation data loader for functional tests
+            n_components: Number of principal components to analyze
+
+        Returns:
+            dict: Analysis results by phase and transition
+        """
+        # Ensure PCA is fitted
+        self._ensure_pca_fitted()
+
+        if not self.pca_fitted:
+            print("Not enough data to fit PCA. Need at least 3 weight snapshots.")
+            return None
+
+        # Get phase structure and transitions from analyzer
+        transitions = phase_analyzer.detected_transitions
+        # warning this dictionary is redundant - phase structure could simply be a list,
+        #  but then reduce the `if phase_structure and 'phases' in phase_structure:`
+        #  to simple looking through the list
+        phase_structure = {}
+        phase_structure['phases'] = phase_analyzer.phase_structure
+
+        # Also check for grokking points
+        grokking_epochs = []
+        if hasattr(phase_analyzer.model, 'logger') and phase_analyzer.model.logger:
+            logger = phase_analyzer.model.logger
+            if 'grokking_phases' in logger.logs and 'grokking_step' in logger.logs['grokking_phases']:
+                grokking_step = logger.logs['grokking_phases']['grokking_step']
+                if isinstance(grokking_step, list):
+                    grokking_epochs.extend(grokking_step)
+                else:
+                    grokking_epochs.append(grokking_step)
+
+        # Initialize results
+        analysis_results = {
+            'transitions': {},
+            'phases': {},
+            'grokking_points': {},
+            'functional_analysis': {}
+        }
+
+        # Analyze transition points
+        for transition in transitions:
+            transition_epoch = transition['epoch']
+            # Find closest weight snapshot
+            closest_snapshot_idx = self._find_closest_snapshot_idx(transition_epoch)
+            if closest_snapshot_idx is not None:
+                analysis_results['transitions'][transition_epoch] = self._analyze_weight_snapshot(
+                    closest_snapshot_idx, transition_epoch, n_components,
+                    label=f"Transition: {', '.join(transition['transition_types'])}"
+                )
+
+        # Analyze phase midpoints
+        if phase_structure and 'phases' in phase_structure:
+            for i, phase in enumerate(phase_structure['phases']):
+                phase_start = phase['start_epoch']
+                phase_end = phase['end_epoch']
+                phase_mid = (phase_start + phase_end) // 2
+
+                closest_snapshot_idx = self._find_closest_snapshot_idx(phase_mid)
+                if closest_snapshot_idx is not None:
+                    phase_classification = phase.get('classification', 'unknown')
+                    analysis_results['phases'][f"phase_{i + 1}"] = self._analyze_weight_snapshot(
+                        closest_snapshot_idx, phase_mid, n_components,
+                        label=f"Phase {i + 1}: {phase_classification.title()}"
+                    )
+
+        # Analyze grokking points
+        for i, grok_epoch in enumerate(grokking_epochs):
+            closest_snapshot_idx = self._find_closest_snapshot_idx(grok_epoch)
+            if closest_snapshot_idx is not None:
+                analysis_results['grokking_points'][f"grokking_{i + 1}"] = self._analyze_weight_snapshot(
+                    closest_snapshot_idx, grok_epoch, n_components,
+                    label=f"Grokking Point {i + 1}"
+                )
+
+        # Perform functional analysis if eval_loader is provided
+        if eval_loader is not None:
+            # Test model function at different key points
+            key_epochs = []
+            # Add phase transition points
+            key_epochs.extend([t['epoch'] for t in transitions])
+            # Add grokking points
+            key_epochs.extend(grokking_epochs)
+            # Add initial and final states
+            if self.weight_timestamps:
+                key_epochs.extend([self.weight_timestamps[0], self.weight_timestamps[-1]])
+
+            key_epochs = sorted(list(set(key_epochs)))  # Remove duplicates and sort
+
+            # Perform functional analysis at each key epoch
+            for epoch in key_epochs:
+                closest_snapshot_idx = self._find_closest_snapshot_idx(epoch)
+                if closest_snapshot_idx is not None:
+                    func_analysis = self._perform_functional_analysis(
+                        closest_snapshot_idx, epoch, eval_loader
+                    )
+                    analysis_results['functional_analysis'][epoch] = func_analysis
+
+        # Create comprehensive visualization
+        self._visualize_phase_weight_spaces(analysis_results)
+
+        return analysis_results
+
+    def _find_closest_snapshot_idx(self, target_epoch):
+        """Find the index of the snapshot closest to the target epoch"""
+        if not self.weight_timestamps:
+            return None
+
+        distances = [abs(epoch - target_epoch) for epoch in self.weight_timestamps]
+        closest_idx = distances.index(min(distances))
+        return closest_idx
+
+    def _analyze_weight_snapshot(self, snapshot_idx, target_epoch, n_components=3, label=None):
+        """Perform detailed PCA and SVD analysis on a specific weight snapshot"""
+        # Get the flattened weights
+        flattened_weights = self.flattened_weights[snapshot_idx]
+
+        # Get the projection in PCA space
+        pca_coords = self.pca.transform([flattened_weights])[0]
+
+        # Get the actual snapshot
+        snapshot = self.weight_snapshots[snapshot_idx]
+        state_dict = snapshot['state_dict']
+
+        # Perform SVD on major weight matrices
+        svd_results = {}
+
+        # Analyze key weight matrices (attention and MLP)
+        for name, param in state_dict.items():
+            # Skip non-weight parameters and small matrices
+            if 'weight' not in name or len(param.shape) < 2 or min(param.shape) < 3:
+                continue
+
+            try:
+                # Perform SVD
+                u, s, vh = torch.linalg.svd(param, full_matrices=False)
+
+                # Calculate key metrics
+                total_var = torch.sum(s ** 2).item()
+                explained_var = [(sing ** 2 / total_var).item() for sing in s[:10]]  # First 10 components
+                condition_number = (s[0] / s[-1]).item() if s[-1] > 0 else float('inf')
+                effective_rank = torch.sum(s) / s[0] if s[0] > 0 else 0
+                effective_rank = effective_rank.item()
+
+                svd_results[name] = {
+                    'singular_values': s.detach().cpu().numpy()[:10].tolist(),  # First 10
+                    'explained_variance': explained_var,
+                    'condition_number': condition_number,
+                    'effective_rank': effective_rank
+                }
+            except:
+                # Skip matrices that cause SVD to fail
+                continue
+
+        # Calculate weight norms by layer
+        layer_norms = {}
+        for layer_idx in range(self.model.num_layers):
+            # Attention weights
+            qkv_norm = 0
+            out_norm = 0
+            mlp_norm = 0
+
+            for name, param in state_dict.items():
+                if f'layers.{layer_idx}.attn.in_proj' in name:
+                    qkv_norm += torch.norm(param).item()
+                elif f'layers.{layer_idx}.attn.out_proj' in name:
+                    out_norm += torch.norm(param).item()
+                elif f'layers.{layer_idx}.mlp.' in name and 'weight' in name:
+                    mlp_norm += torch.norm(param).item()
+
+            layer_norms[f'layer_{layer_idx}'] = {
+                'attention_qkv_norm': qkv_norm,
+                'attention_out_norm': out_norm,
+                'mlp_norm': mlp_norm,
+                'total_norm': qkv_norm + out_norm + mlp_norm
+            }
+
+        return {
+            'epoch': target_epoch,
+            'snapshot_epoch': self.weight_timestamps[snapshot_idx],
+            'distance_to_target': abs(self.weight_timestamps[snapshot_idx] - target_epoch),
+            'pca_coordinates': pca_coords[:n_components].tolist(),
+            'pca_explained_variance': self.pca.explained_variance_ratio_[:n_components].tolist(),
+            'layer_weight_norms': layer_norms,
+            'svd_analysis': svd_results,
+            'label': label
+        }
+
+    def _perform_functional_analysis(self, snapshot_idx, target_epoch, eval_loader):
+        """Analyze model function by testing on the evaluation data"""
+        # Store original state
+        original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+
+        try:
+            # Load the snapshot state
+            snapshot = self.weight_snapshots[snapshot_idx]
+            self.model.load_state_dict(snapshot['state_dict'])
+
+            # Evaluate performance
+            self.model.eval()
+            correct = 0
+            total = 0
+
+            with torch.no_grad():
+                for inputs, targets in eval_loader:
+                    inputs = inputs.to(next(self.model.parameters()).device)
+                    targets = targets.to(next(self.model.parameters()).device)
+
+                    outputs = self.model(inputs)
+                    _, predicted = torch.max(outputs, 1)
+
+                    total += targets.size(0)
+                    correct += (predicted == targets).sum().item()
+
+            accuracy = correct / total if total > 0 else 0
+
+            # Get attention patterns for a sample input
+            sample_input = next(iter(eval_loader))[0].to(next(self.model.parameters()).device)
+            _ = self.model(sample_input, store_attention=True)
+            attention_patterns = self.model.get_attention_patterns()
+
+            # Calculate entropy of attention patterns
+            attention_entropy = {}
+            for head_name, pattern in attention_patterns.items():
+                # Calculate entropy
+                probs = pattern.flatten()
+                probs = probs / (torch.sum(probs) + 1e-10)
+                entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
+                attention_entropy[head_name] = entropy
+
+            return {
+                'epoch': target_epoch,
+                'accuracy': accuracy,
+                'attention_entropy': attention_entropy,
+                'attention_entropy_avg': sum(attention_entropy.values()) / len(
+                    attention_entropy) if attention_entropy else 0
+            }
+
+        finally:
+            # Restore original state
+            self.model.load_state_dict(original_state)
+
+    def _visualize_phase_weight_spaces(self, analysis_results):
+        """Create visualizations of weight spaces across different phases"""
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        # 1. Create PCA trajectory visualization
+        fig1 = plt.figure(figsize=(12, 10))
+        ax1 = fig1.add_subplot(111, projection='3d')
+
+        # Plot full PCA trajectory as background
+        if self.pca_fitted and len(self.flattened_weights) >= 3:
+            projected = self.pca.transform(np.stack(self.flattened_weights))
+            ax1.plot(projected[:, 0], projected[:, 1], projected[:, 2],
+                     'o-', alpha=0.2, color='gray', markersize=3)
+
+        # Plot transitions in red
+        for epoch, data in analysis_results['transitions'].items():
+            coords = data['pca_coordinates']
+            ax1.scatter(coords[0], coords[1], coords[2], color='red', s=100, alpha=0.8)
+            ax1.text(coords[0], coords[1], coords[2], f"T:{epoch}", color='red')
+
+        # Plot phase midpoints in blue
+        for phase_id, data in analysis_results['phases'].items():
+            coords = data['pca_coordinates']
+            ax1.scatter(coords[0], coords[1], coords[2], color='blue', s=100, alpha=0.8)
+            ax1.text(coords[0], coords[1], coords[2], phase_id, color='blue')
+
+        # Plot grokking points in green
+        for grok_id, data in analysis_results['grokking_points'].items():
+            coords = data['pca_coordinates']
+            ax1.scatter(coords[0], coords[1], coords[2], color='green', s=100, alpha=0.8)
+            ax1.text(coords[0], coords[1], coords[2], f"G:{data['epoch']}", color='green')
+
+        # Set labels with variance explained
+        explained_var = self.pca.explained_variance_ratio_[:3] * 100
+        ax1.set_xlabel(f'PC1 ({explained_var[0]:.1f}%)')
+        ax1.set_ylabel(f'PC2 ({explained_var[1]:.1f}%)')
+        ax1.set_zlabel(f'PC3 ({explained_var[2]:.1f}%)')
+        ax1.set_title('Weight Space Trajectory with Phase Transitions')
+
+        plt.tight_layout()
+        plt.savefig(self.save_dir / "phase_weight_spaces_3d.png")
+        plt.close(fig1)
+
+        # 2. Create layer norm comparison across phases
+        if analysis_results['phases']:
+            # Collect data for all layers
+            layer_data = []
+            for phase_id, data in analysis_results['phases'].items():
+                for layer_id, norms in data['layer_weight_norms'].items():
+                    layer_data.append({
+                        'phase': phase_id,
+                        'layer': layer_id,
+                        'attn_qkv': norms['attention_qkv_norm'],
+                        'attn_out': norms['attention_out_norm'],
+                        'mlp': norms['mlp_norm'],
+                        'total': norms['total_norm'],
+                        'epoch': data['epoch']
+                    })
+
+            # Create visualization
+            if layer_data:
+                import pandas as pd
+                import seaborn as sns
+
+                df = pd.DataFrame(layer_data)
+
+                fig2, axes = plt.subplots(2, 2, figsize=(16, 12))
+
+                # Plot attention QKV norms
+                sns.barplot(x='layer', y='attn_qkv', hue='phase', data=df, ax=axes[0, 0])
+                axes[0, 0].set_title('Attention QKV Weight Norms by Phase')
+
+                # Plot attention output norms
+                sns.barplot(x='layer', y='attn_out', hue='phase', data=df, ax=axes[0, 1])
+                axes[0, 1].set_title('Attention Output Weight Norms by Phase')
+
+                # Plot MLP norms
+                sns.barplot(x='layer', y='mlp', hue='phase', data=df, ax=axes[1, 0])
+                axes[1, 0].set_title('MLP Weight Norms by Phase')
+
+                # Plot total norms
+                sns.barplot(x='layer', y='total', hue='phase', data=df, ax=axes[1, 1])
+                axes[1, 1].set_title('Total Layer Weight Norms by Phase')
+
+                plt.tight_layout()
+                plt.savefig(self.save_dir / "phase_layer_norms_comparison.png")
+                plt.close(fig2)
+
+        # 3. Create SVD analysis visualization
+        svd_data = []
+        for key_type in ['transitions', 'phases', 'grokking_points']:
+            for key, data in analysis_results[key_type].items():
+                if 'svd_analysis' in data:
+                    for layer_name, svd_results in data['svd_analysis'].items():
+                        if 'effective_rank' in svd_results and 'condition_number' in svd_results:
+                            svd_data.append({
+                                'key_type': key_type,
+                                'key': key,
+                                'epoch': data['epoch'],
+                                'layer': layer_name,
+                                'effective_rank': svd_results['effective_rank'],
+                                'condition_number': min(svd_results['condition_number'], 1000),
+                                # Cap for better visualization
+                                'explained_var_ratio': svd_results['explained_variance'][0]  # Top component
+                            })
+
+        if svd_data:
+            import pandas as pd
+            import seaborn as sns
+
+            df = pd.DataFrame(svd_data)
+
+            # Focus on specific layer types for clarity
+            df['layer_type'] = df['layer'].apply(lambda x:
+                                                 'attn_in' if 'attn.in_proj' in x else
+                                                 'attn_out' if 'attn.out_proj' in x else
+                                                 'mlp_up' if 'mlp.0.weight' in x else
+                                                 'mlp_down' if 'mlp.2.weight' in x else 'other'
+                                                 )
+
+            # Filter only main component types
+            df_filtered = df[df['layer_type'].isin(['attn_in', 'attn_out', 'mlp_up', 'mlp_down'])]
+
+            fig3, axes = plt.subplots(2, 1, figsize=(14, 10))
+
+            # Effective rank by epoch and layer type
+            sns.lineplot(x='epoch', y='effective_rank', hue='layer_type',
+                         data=df_filtered, marker='o', ax=axes[0])
+            axes[0].set_title('Effective Rank Across Learning Phases')
+
+            # Condition number by epoch and layer type
+            sns.lineplot(x='epoch', y='condition_number', hue='layer_type',
+                         data=df_filtered, marker='o', ax=axes[1])
+            axes[1].set_title('Condition Number Across Learning Phases')
+
+            # Add vertical lines for phase transitions
+            for transition_epoch in analysis_results['transitions'].keys():
+                axes[0].axvline(x=transition_epoch, color='r', linestyle='--', alpha=0.5)
+                axes[1].axvline(x=transition_epoch, color='r', linestyle='--', alpha=0.5)
+
+            # Add vertical lines for grokking points
+            for grok_data in analysis_results['grokking_points'].values():
+                grok_epoch = grok_data['epoch']
+                axes[0].axvline(x=grok_epoch, color='g', linestyle='-', alpha=0.5)
+                axes[1].axvline(x=grok_epoch, color='g', linestyle='-', alpha=0.5)
+
+            plt.tight_layout()
+            plt.savefig(self.save_dir / "phase_svd_analysis.png")
+            plt.close(fig3)
+
+        # 4. Create functional analysis visualization if available
+        if analysis_results['functional_analysis']:
+            func_data = []
+            for epoch, data in analysis_results['functional_analysis'].items():
+                func_data.append({
+                    'epoch': epoch,
+                    'accuracy': data['accuracy'],
+                    'attn_entropy_avg': data['attention_entropy_avg']
+                })
+
+            if func_data:
+                import pandas as pd
+
+                df = pd.DataFrame(func_data).sort_values('epoch')
+
+                fig4, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+
+                # Plot accuracy
+                axes[0].plot(df['epoch'], df['accuracy'], 'bo-')
+                axes[0].set_ylabel('Accuracy')
+                axes[0].set_title('Model Accuracy Across Learning Phases')
+
+                # Plot attention entropy
+                axes[1].plot(df['epoch'], df['attn_entropy_avg'], 'ro-')
+                axes[1].set_xlabel('Epoch')
+                axes[1].set_ylabel('Avg Attention Entropy')
+                axes[1].set_title('Attention Pattern Entropy Across Learning Phases')
+
+                # Add vertical lines for phase transitions
+                for transition_epoch in analysis_results['transitions'].keys():
+                    axes[0].axvline(x=transition_epoch, color='r', linestyle='--', alpha=0.5)
+                    axes[1].axvline(x=transition_epoch, color='r', linestyle='--', alpha=0.5)
+
+                # Add vertical lines for grokking points
+                for grok_data in analysis_results['grokking_points'].values():
+                    grok_epoch = grok_data['epoch']
+                    axes[0].axvline(x=grok_epoch, color='g', linestyle='-', alpha=0.5)
+                    axes[1].axvline(x=grok_epoch, color='g', linestyle='-', alpha=0.5)
+
+                plt.tight_layout()
+                plt.savefig(self.save_dir / "phase_functional_analysis.png")
+                plt.close(fig4)
