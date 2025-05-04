@@ -1,6 +1,8 @@
 # analyzers/base_analyzer.py
 from pathlib import Path
 
+import torch
+
 
 class BaseAnalyzer:
     """Base class for all analysis components"""

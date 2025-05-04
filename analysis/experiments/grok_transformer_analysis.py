@@ -14,6 +14,7 @@ from analysis.trainers.analysis import train_with_analysis
 from analysis.trainers.enhanced_analysis import train_with_enhanced_analysis
 from analysis.trainers.train_phase_analysis import train_with_phase_analysis
 from analysis.utils.checkpoint_manager import GrokAwareCheckpointManager
+from analysis.visualization.visualize_phases_anthropic_style import create_phase_visualizations
 
 
 def create_model(embedding, num_layers, heads_per_layer, batch_size,
@@ -229,6 +230,14 @@ def main_with_phase_tracking(args, model, train_loader, eval_loader, criterion,
     print("\nLearning Phase Insights:")
     for insight in summary['insights']:
         print(f" - {insight}")
+
+    # info create the complete set of visualizations
+    visualization_results = create_phase_visualizations(
+        model=model,
+        phase_analyzer=phase_analyzer,
+        weight_tracker=weight_tracker,
+        save_dir=model.save_dir / "phase_visualizations"
+    )
 
     return model, weight_tracker, phase_analyzer, phase_weight_analysis
 

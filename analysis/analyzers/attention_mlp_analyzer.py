@@ -63,7 +63,7 @@ class AttentionMLPAnalyzer:
         # Set up hooks
         hooks = []
 
-        # Attention input hook
+        # info attention input hook
         def get_attn_input_hook(layer_idx):
             def hook(module, input, output):
                 # input is a tuple, we usually want the first element
@@ -76,7 +76,7 @@ class AttentionMLPAnalyzer:
 
             return hook
 
-        # Attention output hook
+        # info attention output hook
         def get_attn_output_hook(layer_idx):
             def hook(module, input, output):
                 # Sometimes output can be a tuple in MultiheadAttention
@@ -91,7 +91,7 @@ class AttentionMLPAnalyzer:
 
             return hook
 
-        # MLP input hook
+        # info MLP input hook
         def get_mlp_input_hook(layer_idx):
             def hook(module, input, output):
                 if isinstance(input, tuple) and len(input) > 0:
@@ -100,7 +100,7 @@ class AttentionMLPAnalyzer:
 
             return hook
 
-        # MLP output hook
+        # info MLP output hook
         def get_mlp_output_hook(layer_idx):
             def hook(module, input, output):
                 if torch.is_tensor(output):
@@ -111,7 +111,7 @@ class AttentionMLPAnalyzer:
 
             return hook
 
-        # Layer output hook
+        # info Layer output hook
         def get_layer_output_hook(layer_idx):
             def hook(module, input, output):
                 if torch.is_tensor(output):
@@ -122,7 +122,7 @@ class AttentionMLPAnalyzer:
 
             return hook
 
-        # Register hooks
+        # info Register hooks
         for i, layer in enumerate(model.layers):
             # Layernorm hooks
             hooks.append(layer.ln_1.register_forward_hook(get_attn_input_hook(i)))
@@ -135,31 +135,31 @@ class AttentionMLPAnalyzer:
             # Layer output hook
             hooks.append(layer.register_forward_hook(get_layer_output_hook(i)))
 
-        # Run forward pass
+        # info Run forward pass
         model.eval()
         with torch.no_grad():
             for batch_idx, (inputs, targets) in enumerate(self.eval_loader):
                 if batch_idx >= num_batches:
                     break
 
-                # Store inputs and targets
+                # info store inputs and targets
                 activations['inputs'].append(inputs.cpu())
                 activations['targets'].append(targets.cpu())
 
-                # Forward pass
+                # info forward pass
                 inputs = inputs.to(self.device)
                 _ = model(inputs, store_attention=True)
 
-                # Store attention patterns
+                # info store attention patterns
                 patterns = model.get_attention_patterns()
                 for pattern_name, pattern in patterns.items():
                     activations['attn_patterns'][pattern_name].append(pattern.cpu())
 
-        # Remove hooks
+        # info remove hooks
         for hook in hooks:
             hook.remove()
 
-        # Concatenate batches
+        # info concatenate batches
         for key in activations:
             if key in ['inputs', 'targets']:
                 activations[key] = torch.cat(activations[key], dim=0)
@@ -188,23 +188,23 @@ class AttentionMLPAnalyzer:
         model = self.model
         results = {}
 
-        # For each layer, analyze the flow from attention to MLP
+        # info for each layer, analyze the flow from attention to MLP
         for layer_idx in range(model.num_layers):
             # Skip if we don't have data for this layer
             if (layer_idx not in activations['attn_outputs'] or
                     layer_idx not in activations['mlp_inputs']):
                 continue
 
-            # Get attention outputs and MLP inputs for this layer
+            # info get attention outputs and MLP inputs for this layer
             attn_out = activations['attn_outputs'][layer_idx]
             mlp_in = activations['mlp_inputs'][layer_idx]
 
-            # Calculate correlation between attention output and MLP input
+            # info calculate correlation between attention output and MLP input
             # We need to reshape to 2D: [batch_size * seq_len, hidden_dim]
             attn_out_flat = attn_out.reshape(-1, attn_out.size(-1))
             mlp_in_flat = mlp_in.reshape(-1, mlp_in.size(-1))
 
-            # Compute correlation for each dimension
+            # info compute correlation for each dimension
             dim_correlations = []
             for dim_idx in range(min(attn_out_flat.size(1), 20)):  # Limit to 20 dims for efficiency
                 corr, _ = pearsonr(
@@ -213,17 +213,17 @@ class AttentionMLPAnalyzer:
                 )
                 dim_correlations.append(corr)
 
-            # Compute overall correlation matrix (sample up to 100 dimensions)
+            # info compute overall correlation matrix (sample up to 100 dimensions)
             sample_dims = min(attn_out_flat.size(1), 100)
             corr_matrix = np.corrcoef(
                 attn_out_flat[:, :sample_dims].numpy().T,
                 mlp_in_flat[:, :sample_dims].numpy().T
             )
 
-            # Extract the cross-correlation block
+            # info extract the cross-correlation block
             cross_corr = corr_matrix[:sample_dims, sample_dims:]
 
-            # Store results for this layer
+            # info store results for this layer
             results[f'layer_{layer_idx}'] = {
                 'dimension_correlations': dim_correlations,
                 'mean_correlation': np.mean(dim_correlations),
@@ -250,7 +250,7 @@ class AttentionMLPAnalyzer:
         model = self.model
         results = {}
 
-        # Extract per-head attention outputs
+        # info extract per-head attention outputs
         head_outputs = {}
 
         for layer_idx in range(model.num_layers):
@@ -258,32 +258,32 @@ class AttentionMLPAnalyzer:
             if layer_idx not in activations['attn_outputs']:
                 continue
 
-            # Get attention outputs
+            # info get attention outputs
             attn_out = activations['attn_outputs'][layer_idx]
             batch_size, seq_len, hidden_dim = attn_out.shape
             head_dim = hidden_dim // model.num_heads
 
-            # Reshape to separate heads: [batch_size, seq_len, num_heads, head_dim]
+            # info reshape to separate heads: [batch_size, seq_len, num_heads, head_dim]
             reshaped = attn_out.view(batch_size, seq_len, model.num_heads, head_dim)
 
-            # Store each head's output separately
+            # info store each head's output separately
             for head_idx in range(model.num_heads):
                 head_out = reshaped[:, :, head_idx]  # [batch_size, seq_len, head_dim]
                 head_outputs[f'layer_{layer_idx}_head_{head_idx}'] = head_out
 
-        # Analyze head patterns
+        # info analyze head patterns
         head_pattern_stats = {}
         for pattern_name, patterns in activations['attn_patterns'].items():
             # Calculate average pattern
             avg_pattern = torch.mean(patterns, dim=0)
 
-            # Calculate entropy (lower means more specialized/focused)
+            # info calculate entropy (lower means more specialized/focused)
             entropy = -torch.sum(avg_pattern * torch.log(avg_pattern + 1e-10)).item()
 
-            # Calculate diagonal strength (higher means more focus on the token itself)
+            # info calculate diagonal strength (higher means more focus on the token itself)
             diag_strength = torch.mean(torch.diag(avg_pattern)).item()
 
-            # Calculate position bias (where the head focuses most)
+            # info calculate position bias (where the head focuses most)
             row_means = torch.mean(patterns, dim=1)  # Average across columns to get row importance
             pos_bias = torch.argmax(row_means).item()
 
@@ -294,28 +294,28 @@ class AttentionMLPAnalyzer:
                 'mean_pattern': avg_pattern.numpy()
             }
 
-        # Analyze MLP specialization
+        # info analyze MLP specialization
         mlp_specialization = {}
         for layer_idx in range(model.num_layers):
             # Skip if we don't have data for this layer
             if layer_idx not in activations['mlp_outputs']:
                 continue
 
-            # Get MLP outputs
+            # info get MLP outputs
             mlp_out = activations['mlp_outputs'][layer_idx]
             batch_size, seq_len, hidden_dim = mlp_out.shape
 
-            # Reshape to 2D: [batch_size * seq_len, hidden_dim]
+            # info geshape to 2D: [batch_size * seq_len, hidden_dim]
             mlp_out_flat = mlp_out.reshape(-1, hidden_dim)
 
-            # Run PCA to find the principal components of MLP output
+            # info run PCA to find the principal components of MLP output
             pca = PCA(n_components=min(pca_dims, mlp_out_flat.shape[1], mlp_out_flat.shape[0]))
             pca.fit(mlp_out_flat.numpy())
 
-            # Calculate explained variance ratio
+            # info calculate explained variance ratio
             explained_variance = pca.explained_variance_ratio_
 
-            # Calculate sparsity of activations
+            # info calculate sparsity of activations
             act_sparsity = (mlp_out_flat.abs() < 0.01).float().mean().item()
 
             mlp_specialization[f'layer_{layer_idx}'] = {
@@ -350,7 +350,7 @@ class AttentionMLPAnalyzer:
 
         vis_paths = {}
 
-        # 1. Visualize correlation between attention outputs and MLP inputs
+        # info 1. Visualize correlation between attention outputs and MLP inputs
         corr_fig, corr_axes = plt.subplots(self.model.num_layers, 1,
                                            figsize=(10, 5 * self.model.num_layers))
 
@@ -362,7 +362,7 @@ class AttentionMLPAnalyzer:
             if layer_key not in activation_flow:
                 continue
 
-            # Plot correlation matrix
+            # info plot correlation matrix
             sns.heatmap(
                 activation_flow[layer_key]['cross_correlation_matrix'],
                 cmap='coolwarm',
@@ -380,10 +380,10 @@ class AttentionMLPAnalyzer:
         plt.close(corr_fig)
         vis_paths['correlation'] = str(corr_path)
 
-        # 2. Visualize head pattern statistics
+        # info 2. Visualize head pattern statistics
         pattern_fig, pattern_axes = plt.subplots(1, 2, figsize=(15, 6))
 
-        # Extract pattern stats
+        # info extract pattern stats
         pattern_data = []
         for pattern_name, stats in specialization['head_pattern_stats'].items():
             layer_idx = int(pattern_name.split('_')[1])
@@ -397,7 +397,7 @@ class AttentionMLPAnalyzer:
 
         pattern_df = pd.DataFrame(pattern_data)
 
-        # Plot entropy
+        # info plot entropy
         sns.barplot(
             data=pattern_df,
             x='head',
@@ -409,7 +409,7 @@ class AttentionMLPAnalyzer:
         pattern_axes[0].set_xlabel('Head Index')
         pattern_axes[0].set_ylabel('Entropy')
 
-        # Plot diagonal strength
+        # info plot diagonal strength
         sns.barplot(
             data=pattern_df,
             x='head',
@@ -427,10 +427,10 @@ class AttentionMLPAnalyzer:
         plt.close(pattern_fig)
         vis_paths['pattern_stats'] = str(pattern_path)
 
-        # 3. Visualize MLP specialization
+        # info 3. Visualize MLP specialization
         mlp_fig, mlp_axes = plt.subplots(1, 2, figsize=(15, 6))
 
-        # Extract MLP stats
+        # info extract MLP stats
         mlp_data = []
         for layer_key, stats in specialization['mlp_specialization'].items():
             layer_idx = int(layer_key.split('_')[1])
@@ -442,7 +442,7 @@ class AttentionMLPAnalyzer:
 
         mlp_df = pd.DataFrame(mlp_data)
 
-        # Plot concentration
+        # info plot concentration
         sns.barplot(
             data=mlp_df,
             x='layer',
@@ -453,7 +453,7 @@ class AttentionMLPAnalyzer:
         mlp_axes[0].set_xlabel('Layer Index')
         mlp_axes[0].set_ylabel('PCA Concentration')
 
-        # Plot sparsity
+        # info plot sparsity
         sns.barplot(
             data=mlp_df,
             x='layer',
@@ -470,7 +470,7 @@ class AttentionMLPAnalyzer:
         plt.close(mlp_fig)
         vis_paths['mlp_specialization'] = str(mlp_path)
 
-        # 4. Visualize sample attention patterns
+        # info 4. Visualize sample attention patterns
         pattern_vis_fig, pattern_vis_axes = plt.subplots(
             self.model.num_layers,
             self.model.num_heads,
@@ -490,17 +490,17 @@ class AttentionMLPAnalyzer:
                 if pattern_name not in specialization['head_pattern_stats']:
                     continue
 
-                # Get mean pattern
+                # info get mean pattern
                 mean_pattern = specialization['head_pattern_stats'][pattern_name]['mean_pattern']
 
-                # Check dimensionality and reshape if needed
+                # info check dimensionality and reshape if needed
                 if len(mean_pattern.shape) == 1:
-                    # Assuming it should be a square matrix
+                    # info assuming it should be a square matrix
                     seq_len = int(math.sqrt(len(mean_pattern)))
                     if seq_len ** 2 == len(mean_pattern):  # Perfect square check
                         mean_pattern = mean_pattern.reshape(seq_len, seq_len)
                     else:
-                        # If not a perfect square, just make it a row vector
+                        # info if not a perfect square, just make it a row vector
                         mean_pattern = mean_pattern.reshape(1, -1)
                 sns.heatmap(
                     mean_pattern,
@@ -550,20 +550,20 @@ class AttentionMLPAnalyzer:
         if activations is None:
             activations = self.collect_activations()
 
-        # Get the activations to analyze
+        # info get the activations to analyze
         if component == 'mlp':
             if layer_idx not in activations['mlp_outputs']:
                 raise ValueError(f"No MLP outputs available for layer {layer_idx}")
             act_data = activations['mlp_outputs'][layer_idx]
-        else:  # attention
+        else:  # info attention
             if layer_idx not in activations['attn_outputs']:
                 raise ValueError(f"No attention outputs available for layer {layer_idx}")
             act_data = activations['attn_outputs'][layer_idx]
 
-        # Flatten activations
+        # info flatten activations
         act_flat = act_data.reshape(-1, act_data.size(-1))
 
-        # Create dataloader
+        # info create dataloader
         dataset = torch.utils.data.TensorDataset(act_flat)
         dataloader = torch.utils.data.DataLoader(
             dataset,
@@ -571,7 +571,7 @@ class AttentionMLPAnalyzer:
             shuffle=True
         )
 
-        # Train the autoencoder
+        # info train the autoencoder
         autoencoder.to(self.device)
         optimizer = torch.optim.Adam(autoencoder.parameters(), lr=0.001)
 
@@ -583,7 +583,7 @@ class AttentionMLPAnalyzer:
             for batch in dataloader:
                 x = batch[0].to(self.device)
 
-                # Forward pass
+                # info forward pass
                 x_recon, codes = autoencoder(x)
 
                 # Calculate losses
@@ -591,7 +591,7 @@ class AttentionMLPAnalyzer:
                 sparse_loss = autoencoder.l1_coef * torch.abs(codes).mean()
                 loss = recon_loss + sparse_loss
 
-                # Backward pass
+                # info backward pass
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -605,7 +605,7 @@ class AttentionMLPAnalyzer:
                       f"(Recon = {reconstruction_loss / len(dataloader):.6f}, "
                       f"Sparse = {sparsity_loss / len(dataloader):.6f})")
 
-        # Analyze the learned features
+        # info analyze the learned features
         all_codes = []
         autoencoder.eval()
         with torch.no_grad():
@@ -616,12 +616,12 @@ class AttentionMLPAnalyzer:
 
         all_codes = torch.cat(all_codes, dim=0)
 
-        # Calculate statistics
+        # info calculate statistics
         avg_activation = torch.mean(all_codes, dim=0)
         activation_frequency = torch.mean((all_codes > 0.1).float(), dim=0)
         feature_usage = activation_frequency.numpy()
 
-        # Get decoder weights for feature visualization
+        # info get decoder weights for feature visualization
         decoder_weights = autoencoder.decoder.weight.detach().cpu().numpy().T
 
         results = {
@@ -648,7 +648,7 @@ class AttentionMLPAnalyzer:
         """
         vis_paths = {}
 
-        # 1. Feature usage distribution
+        # info 1. Feature usage distribution
         usage_fig, usage_ax = plt.subplots(figsize=(12, 6))
 
         sns.histplot(
@@ -666,8 +666,8 @@ class AttentionMLPAnalyzer:
         plt.close(usage_fig)
         vis_paths['feature_usage'] = str(usage_path)
 
-        # 2. Top features visualization (decoder weights)
-        # Find top activated features
+        # info 2. Top features visualization (decoder weights)
+        # info find top activated features
         top_features = np.argsort(results['activation_frequency'])[-20:]
 
         top_fig, top_axes = plt.subplots(4, 5, figsize=(15, 12))
@@ -677,8 +677,8 @@ class AttentionMLPAnalyzer:
             # Get decoder weights for this feature
             feature_weights = results['decoder_weights'][feature_idx]
 
-            # Plot as a heatmap reshaped to match input dimension structure if possible
-            # Simple case: just plot as a bar chart
+            # info plot as a heatmap reshaped to match input dimension structure if possible
+            # info simple case: just plot as a bar chart
             top_axes[i].bar(
                 range(len(feature_weights)),
                 feature_weights,
@@ -693,7 +693,7 @@ class AttentionMLPAnalyzer:
         plt.close(top_fig)
         vis_paths['top_features'] = str(top_path)
 
-        # 3. Code correlation heatmap
+        # info 3. Code correlation heatmap
         code_fig, code_ax = plt.subplots(figsize=(12, 10))
 
         # Calculate correlation matrix on a sample of codes (up to 1000 for efficiency)
@@ -717,10 +717,10 @@ class AttentionMLPAnalyzer:
         plt.close(code_fig)
         vis_paths['code_correlations'] = str(code_path)
 
-        # 4. t-SNE visualization of codes
+        # info 4. t-SNE visualization of codes
         tsne_fig, tsne_ax = plt.subplots(figsize=(10, 8))
 
-        # Run t-SNE on a sample of codes
+        # info run t-SNE on a sample of codes
         tsne = TSNE(n_components=2, random_state=42)
         tsne_result = tsne.fit_transform(sample_codes)
 
@@ -742,7 +742,7 @@ class AttentionMLPAnalyzer:
 
         return vis_paths
 
-    # Completing the analyze_across_grokking_phases method
+    # info completing the analyze_across_grokking_phases method
 
     def analyze_across_grokking_phases(self, save_dir=None, phase_checkpoints=None):
         """
@@ -761,35 +761,35 @@ class AttentionMLPAnalyzer:
         save_dir = Path(save_dir) if save_dir else self.save_dir / "phase_comparison"
         save_dir.mkdir(exist_ok=True, parents=True)
 
-        # Storage for results across phases
+        # info storage for results across phases
         phase_results = {}
 
         for phase_name, checkpoint_path in phase_checkpoints:
             print(f"Analyzing {phase_name} phase from {checkpoint_path}...")
 
-            # Load checkpoint
+            # info load checkpoint
             checkpoint = torch.load(checkpoint_path)
             self.model.load_state_dict(checkpoint["model_state_dict"])
 
-            # Collect activations and analyze
+            # info collect activations and analyze
             activations = self.collect_activations()
             flow_results = self.analyze_activation_flow(activations)
             spec_results = self.analyze_attention_mlp_specialization(activations)
 
-            # Store results
+            # info store results
             phase_results[phase_name] = {
                 'flow': flow_results,
                 'specialization': spec_results
             }
 
-            # Visualize individual phase
+            # info visualize individual phase
             self.visualize_attention_mlp_relation(
                 epoch=phase_name,  # Use phase name instead of epoch
                 activation_flow=flow_results,
                 specialization=spec_results
             )
 
-        # Compare across phases - create comparative visualizations
+        # info compare across phases - create comparative visualizations
         comparison_results = self.create_phase_comparison_visualizations(phase_results, save_dir)
 
         return {
@@ -810,10 +810,10 @@ class AttentionMLPAnalyzer:
         """
         vis_paths = {}
 
-        # 1. Compare attention-MLP correlation across phases
+        # info 1. Compare attention-MLP correlation across phases
         corr_fig, corr_ax = plt.subplots(figsize=(12, 6))
 
-        # Extract correlation data
+        # info extract correlation data
         corr_data = []
         for phase_name, results in phase_results.items():
             for layer_key, layer_results in results['flow'].items():
@@ -826,7 +826,7 @@ class AttentionMLPAnalyzer:
 
         corr_df = pd.DataFrame(corr_data)
 
-        # Plot correlation comparison
+        # info plot correlation comparison
         sns.barplot(
             data=corr_df,
             x='layer',
@@ -844,10 +844,10 @@ class AttentionMLPAnalyzer:
         plt.close(corr_fig)
         vis_paths['correlation_comparison'] = str(corr_path)
 
-        # 2. Compare head specialization (entropy) across phases
+        # info 2. Compare head specialization (entropy) across phases
         entropy_fig, entropy_ax = plt.subplots(figsize=(14, 7))
 
-        # Extract entropy data
+        # info extract entropy data
         entropy_data = []
         for phase_name, results in phase_results.items():
             for pattern_name, pattern_stats in results['specialization']['head_pattern_stats'].items():
@@ -862,7 +862,7 @@ class AttentionMLPAnalyzer:
 
         entropy_df = pd.DataFrame(entropy_data)
 
-        # Plot entropy comparison
+        # info plot entropy comparison
         sns.barplot(
             data=entropy_df,
             x='head',
@@ -880,10 +880,10 @@ class AttentionMLPAnalyzer:
         plt.close(entropy_fig)
         vis_paths['entropy_comparison'] = str(entropy_path)
 
-        # 3. Compare MLP specialization across phases
+        # info 3. Compare MLP specialization across phases
         mlp_fig, mlp_ax = plt.subplots(figsize=(12, 6))
 
-        # Extract MLP specialization data
+        # info extract MLP specialization data
         mlp_data = []
         for phase_name, results in phase_results.items():
             for layer_key, layer_results in results['specialization']['mlp_specialization'].items():
@@ -896,7 +896,7 @@ class AttentionMLPAnalyzer:
 
         mlp_df = pd.DataFrame(mlp_data)
 
-        # Plot MLP concentration comparison
+        # info plot MLP concentration comparison
         sns.barplot(
             data=mlp_df,
             x='layer',
@@ -914,12 +914,12 @@ class AttentionMLPAnalyzer:
         plt.close(mlp_fig)
         vis_paths['mlp_concentration_comparison'] = str(mlp_path)
 
-        # 4. Compare attention patterns visually across phases
-        # Create a grid of attention patterns for each phase and head
+        # info 4. compare attention patterns visually across phases
+        # info create a grid of attention patterns for each phase and head
         phases = list(phase_results.keys())
         num_phases = len(phases)
 
-        # Find number of layers and heads
+        # info find number of layers and heads
         num_layers = 0
         num_heads = 0
         for phase_name, results in phase_results.items():
@@ -929,14 +929,14 @@ class AttentionMLPAnalyzer:
                 num_layers = max(num_layers, layer_idx + 1)
                 num_heads = max(num_heads, head_idx + 1)
 
-        # Create a large figure with all patterns
+        # info create a large figure with all patterns
         pattern_fig, pattern_axes = plt.subplots(
             num_phases * num_layers,
             num_heads,
             figsize=(4 * num_heads, 4 * num_layers * num_phases)
         )
 
-        # Adjust pattern_axes based on dimensions
+        # info adjust pattern_axes based on dimensions
         if num_layers * num_phases == 1 and num_heads == 1:
             pattern_axes = np.array([[pattern_axes]])
         elif num_layers * num_phases == 1:
@@ -951,14 +951,14 @@ class AttentionMLPAnalyzer:
                     if pattern_name not in phase_results[phase_name]['specialization']['head_pattern_stats']:
                         continue
 
-                    # Get mean pattern
+                    # info get mean pattern
                     mean_pattern = phase_results[phase_name]['specialization']['head_pattern_stats'][pattern_name][
                         'mean_pattern']
 
-                    # Get axis index
+                    # info get axis index
                     ax_idx = phase_idx * num_layers + layer_idx
 
-                    # Plot pattern
+                    # info plot pattern
                     sns.heatmap(
                         mean_pattern,
                         cmap='viridis',
@@ -967,7 +967,7 @@ class AttentionMLPAnalyzer:
                         vmin=self.heatmap_min, vmax=self.heatmap_max,
                     )
                     pattern_axes[ax_idx, head_idx].set_title(f'{phase_name}: L{layer_idx}, H{head_idx}')
-                    # Remove x and y labels for cleaner look
+                    # info remove x and y labels for cleaner look
                     pattern_axes[ax_idx, head_idx].set_xlabel('')
                     pattern_axes[ax_idx, head_idx].set_ylabel('')
                     pattern_axes[ax_idx, head_idx].set_xticks([])
@@ -1004,10 +1004,10 @@ class AttentionMLPAnalyzer:
             jump_epoch = result['jump_epoch']
             jump_char = result['characterization']
 
-            # Store the current model state
+            # info store the current model state
             original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
-            # Get pre-jump, jump, and post-jump states
+            # info get pre-jump, jump, and post-jump states
             pre_jump_state = result.get('pre_jump_snapshot', {}).get('state_dict')
             jump_state = result.get('jump_snapshot', {}).get('state_dict')
             post_jump_state = result.get('post_jump_snapshot', {}).get('state_dict')
@@ -1024,10 +1024,10 @@ class AttentionMLPAnalyzer:
                     if state is None:
                         continue
 
-                    # Load this state
+                    # info load this state
                     self.model.load_state_dict(state)
 
-                    # Focus on top changing layers and heads from characterization
+                    # info focus on top changing layers and heads from characterization
                     top_layers = [int(layer.split('_')[1]) for layer in jump_char.get('top_layers', [])]
                     top_heads = []
                     for head in jump_char.get('top_heads', []):
@@ -1037,31 +1037,31 @@ class AttentionMLPAnalyzer:
                             head_idx = int(parts[3])
                             top_heads.append((layer_idx, head_idx))
 
-                    # Collect activations
+                    # info collect activations
                     activations = self.collect_activations(num_batches=num_batches)
 
-                    # Analyze activation flow for top layers
+                    # info analyze activation flow for top layers
                     flow_analysis = {}
                     for layer_idx in top_layers:
                         layer_key = f'layer_{layer_idx}'
                         if layer_idx in activations.get('attn_outputs', {}) and layer_idx in activations.get(
                                 'mlp_inputs',
                                 {}):
-                            # Get attention outputs and MLP inputs
+                            # info get attention outputs and MLP inputs
                             attn_out = activations['attn_outputs'][layer_idx]
                             mlp_in = activations['mlp_inputs'][layer_idx]
 
-                            # Reshape for correlation analysis
+                            # info reshape for correlation analysis
                             attn_out_flat = attn_out.reshape(-1, attn_out.size(-1))
                             mlp_in_flat = mlp_in.reshape(-1, mlp_in.size(-1))
 
-                            # Calculate correlation
+                            # info calculate correlation
                             corr_matrix = np.corrcoef(
                                 attn_out_flat[:, :100].numpy().T,  # Sample up to 100 dims
                                 mlp_in_flat[:, :100].numpy().T
                             )
 
-                            # Extract cross-correlation block
+                            # info extract cross-correlation block
                             cross_corr = corr_matrix[:100, 100:]
 
                             flow_analysis[layer_key] = {
@@ -1069,17 +1069,17 @@ class AttentionMLPAnalyzer:
                                 'cross_correlation_matrix': cross_corr
                             }
 
-                    # Analyze patterns for top heads
+                    # info analyze patterns for top heads
                     pattern_analysis = {}
                     for layer_idx, head_idx in top_heads:
                         pattern_key = f'layer_{layer_idx}_head_{head_idx}'
                         if pattern_key in activations.get('attn_patterns', {}):
                             patterns = activations['attn_patterns'][pattern_key]
 
-                            # Calculate entropy (lower means more specialized)
+                            # info calculate entropy (lower means more specialized)
                             entropy = -torch.sum(patterns * torch.log(patterns + 1e-10)).item()
 
-                            # Calculate diagonal strength (focus on token itself)
+                            # info calculate diagonal strength (focus on token itself)
                             diag_strength = torch.mean(torch.diag(patterns)).item()
 
                             pattern_analysis[pattern_key] = {
@@ -1088,13 +1088,13 @@ class AttentionMLPAnalyzer:
                                 'mean_pattern': patterns.mean(0).numpy()
                             }
 
-                    # Store results for this state
+                    # info store results for this state
                     jump_analyses[jump_epoch][state_name] = {
                         'flow_analysis': flow_analysis,
                         'pattern_analysis': pattern_analysis
                     }
 
-                    # Apply sparse autoencoder to analyze top layer representations
+                    # info apply sparse autoencoder to analyze top layer representations
                     if top_layers and 'mlp' in state_name:  # Only for specific states to save time
                         primary_layer = top_layers[0]
                         layer_key = f'layer_{primary_layer}'
@@ -1109,7 +1109,7 @@ class AttentionMLPAnalyzer:
                             mlp_out = activations['mlp_outputs'][primary_layer]
                             mlp_out_flat = mlp_out.reshape(-1, mlp_out.size(-1))
 
-                            # Train autoencoder on this layer's activations
+                            # info train autoencoder on this layer's activations
                             sparse_results = self._train_autoencoder(
                                 autoencoder,
                                 mlp_out_flat,
@@ -1120,12 +1120,12 @@ class AttentionMLPAnalyzer:
                                 layer_key: sparse_results
                             }
             finally:
-                # Restore original model state
+                # info restore original model state
                 self.model.load_state_dict(original_state)
 
-            # Calculate changes across states
+            # info calculate changes across states
             if all(k in jump_analyses[jump_epoch] for k in ['pre_jump', 'jump', 'post_jump']):
-                # Analyze changes in flow correlation
+                # info analyze changes in flow correlation
                 for layer_key in top_layers:
                     layer_key = f'layer_{layer_key}'
                     pre_corr = jump_analyses[jump_epoch]['pre_jump']['flow_analysis'].get(layer_key, {}).get(
@@ -1143,7 +1143,7 @@ class AttentionMLPAnalyzer:
                         }
                     }
 
-                # Analyze changes in pattern entropy
+                # info analyze changes in pattern entropy
                 for pattern_key in pattern_analysis:
                     pre_entropy = jump_analyses[jump_epoch]['pre_jump']['pattern_analysis'].get(pattern_key, {}).get(
                         'entropy', 0)
@@ -1162,7 +1162,7 @@ class AttentionMLPAnalyzer:
                         'overall': post_entropy - pre_entropy
                     }
 
-        # Create visualizations for these analyses
+        # info create visualizations for these analyses
         self._visualize_jump_comparisons(jump_analyses)
 
         return jump_analyses
@@ -1172,13 +1172,13 @@ class AttentionMLPAnalyzer:
         device = next(self.model.parameters()).device
         autoencoder = autoencoder.to(device)
 
-        # Create dataloader
+        # info create dataloader
         dataset = torch.utils.data.TensorDataset(activations)
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=batch_size, shuffle=True
         )
 
-        # Train
+        # info train
         optimizer = torch.optim.Adam(autoencoder.parameters(), lr=0.001)
 
         for epoch in range(epochs):
@@ -1189,15 +1189,15 @@ class AttentionMLPAnalyzer:
             for x, in dataloader:
                 x = x.to(device)
 
-                # Forward pass
+                # info forward pass
                 x_recon, codes = autoencoder(x)
 
-                # Losses
+                # info losses
                 r_loss = torch.nn.functional.mse_loss(x_recon, x)
                 s_loss = autoencoder.l1_coef * torch.abs(codes).mean()
                 loss = r_loss + s_loss
 
-                # Backward
+                # info backward
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -1206,7 +1206,7 @@ class AttentionMLPAnalyzer:
                 recon_loss += r_loss.item()
                 sparse_loss += s_loss.item()
 
-        # Analyze the learned features
+        # info analyze the learned features
         autoencoder.eval()
         all_codes = []
 
@@ -1218,7 +1218,7 @@ class AttentionMLPAnalyzer:
 
         all_codes = torch.cat(all_codes, dim=0)
 
-        # Calculate feature statistics
+        # info calculate feature statistics
         activation_freq = torch.mean((all_codes > 0.1).float(), dim=0).numpy()
         decoder_weights = autoencoder.decoder.weight.detach().cpu().numpy().T
 
@@ -1237,11 +1237,11 @@ class AttentionMLPAnalyzer:
         viz_dir.mkdir(exist_ok=True, parents=True)
 
         for jump_epoch, analysis in jump_analyses.items():
-            # 1. Compare correlation changes
+            # 1. info compare correlation changes
             if 'correlation_changes' in analysis:
                 fig1, ax1 = plt.subplots(figsize=(10, 6))
 
-                # Extract data for plotting
+                # info extract data for plotting
                 layers = []
                 pre_to_jump = []
                 jump_to_post = []
@@ -1253,11 +1253,11 @@ class AttentionMLPAnalyzer:
                     jump_to_post.append(changes['jump_to_post'])
                     overall.append(changes['overall'])
 
-                # Set up x-positions for grouped bars
+                # info set up x-positions for grouped bars
                 x = np.arange(len(layers))
                 width = 0.25
 
-                # Plot grouped bars
+                # info plot grouped bars
                 ax1.bar(x - width, pre_to_jump, width, label='Pre→Jump')
                 ax1.bar(x, jump_to_post, width, label='Jump→Post')
                 ax1.bar(x + width, overall, width, label='Overall')
@@ -1273,11 +1273,11 @@ class AttentionMLPAnalyzer:
                 plt.savefig(viz_dir / f"jump_{jump_epoch}_correlation_changes.png")
                 plt.close(fig1)
 
-            # 2. Compare entropy changes
+            # info 2. compare entropy changes
             if 'entropy_changes' in analysis:
                 fig2, ax2 = plt.subplots(figsize=(12, 6))
 
-                # Extract data for plotting
+                # info extract data for plotting
                 heads = []
                 pre_to_jump = []
                 jump_to_post = []
@@ -1287,7 +1287,7 @@ class AttentionMLPAnalyzer:
                     pre_to_jump.append(changes['pre_to_jump'])
                     jump_to_post.append(changes['jump_to_post'])
 
-                # Convert to DataFrame for grouped bar plot
+                # info convert to DataFrame for grouped bar plot
                 import pandas as pd
                 data = []
                 for i, head in enumerate(heads):
@@ -1296,7 +1296,7 @@ class AttentionMLPAnalyzer:
 
                 df = pd.DataFrame(data)
 
-                # Create grouped bar plot
+                # info create grouped bar plot
                 sns.barplot(x='Head', y='Entropy Change', hue='Change Type', data=df, ax=ax2)
 
                 ax2.set_title(f'Changes in Attention Head Entropy at Jump {jump_epoch}')
@@ -1308,13 +1308,13 @@ class AttentionMLPAnalyzer:
                 plt.savefig(viz_dir / f"jump_{jump_epoch}_entropy_changes.png")
                 plt.close(fig2)
 
-            # 3. Compare attention patterns across states
+            # info 3. compare attention patterns across states
             for state_name in ['pre_jump', 'jump', 'post_jump']:
                 if state_name in analysis and 'pattern_analysis' in analysis[state_name]:
                     patterns = analysis[state_name]['pattern_analysis']
 
                     if patterns:
-                        # Create a grid of patterns
+                        # info create a grid of patterns
                         n_patterns = len(patterns)
                         n_cols = min(n_patterns, 4)
                         n_rows = (n_patterns + n_cols - 1) // n_cols
@@ -1331,7 +1331,7 @@ class AttentionMLPAnalyzer:
                                             vmin=self.heatmap_min, vmax=self.heatmap_max,)
                                 axes[i].set_title(f"{head_key}\nEntropy: {pattern_data['entropy']:.3f}")
 
-                        # Hide unused axes
+                        # info hide unused axes
                         for i in range(n_patterns, len(axes)):
                             axes[i].axis('off')
 
@@ -1339,11 +1339,11 @@ class AttentionMLPAnalyzer:
                         plt.savefig(viz_dir / f"jump_{jump_epoch}_{state_name}_patterns.png")
                         plt.close(fig3)
 
-            # 4. Feature visualization for sparse analysis
+            # info 4. feature visualization for sparse analysis
             for state_name in ['pre_jump', 'jump', 'post_jump']:
                 if state_name in analysis and 'sparse_analysis' in analysis[state_name]:
                     for layer_key, results in analysis[state_name]['sparse_analysis'].items():
-                        # Visualize feature usage distribution
+                        # info visualize feature usage distribution
                         fig4, ax4 = plt.subplots(figsize=(10, 6))
 
                         sns.histplot(results['activation_frequency'], bins=30, ax=ax4)
@@ -1355,7 +1355,7 @@ class AttentionMLPAnalyzer:
                         plt.savefig(viz_dir / f"jump_{jump_epoch}_{state_name}_{layer_key}_feature_dist.png")
                         plt.close(fig4)
 
-                        # Visualize top features
+                        # info visualize top features
                         top_indices = np.argsort(results['activation_frequency'])[-16:]
                         fig5, axes = plt.subplots(4, 4, figsize=(12, 10))
                         axes = axes.flatten()
@@ -1398,16 +1398,16 @@ class AttentionMLPAnalyzer:
             jump_epoch = result['jump_epoch']
             jump_char = result['characterization']
 
-            # Store original model state
+            # info store original model state
             original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
             try:
-                # Get pre-jump, jump, and post-jump states
+                # info get pre-jump, jump, and post-jump states
                 pre_jump_state = result.get('pre_jump_snapshot', {}).get('state_dict')
                 jump_state = result.get('jump_snapshot', {}).get('state_dict')
                 post_jump_state = result.get('post_jump_snapshot', {}).get('state_dict')
 
-                # Focus on top changing components from characterization
+                # info focus on top changing components from characterization
                 top_layers = [int(layer.split('_')[1]) for layer in jump_char.get('top_layers', [])]
                 top_heads = []
                 for head in jump_char.get('top_heads', []):
@@ -1417,101 +1417,101 @@ class AttentionMLPAnalyzer:
                         head_idx = int(parts[3])
                         top_heads.append((layer_idx, head_idx))
 
-                # Identify potential circuit components
+                # info identify potential circuit components
                 potential_components = []
 
-                # Add top heads to potential components
+                # info add top heads to potential components
                 for layer_idx, head_idx in top_heads:
                     potential_components.append(('attention', layer_idx, head_idx))
 
-                # Add top MLP layers to potential components
+                # info add top MLP layers to potential components
                 for layer_idx in top_layers:
                     potential_components.append(('mlp', layer_idx, None))
 
-                # Evaluate baseline performance with post-jump state
+                # info evaluate baseline performance with post-jump state
                 self.model.load_state_dict(post_jump_state)
                 baseline_acc, baseline_loss = self.model.evaluate(eval_loader)
 
-                # Analyze each potential component
+                # info analyze each potential component
                 component_attribution = {}
 
                 for comp_type, layer_idx, head_idx in potential_components:
-                    # Load post-jump state (restored state)
+                    # info load post-jump state (restored state)
                     self.model.load_state_dict(post_jump_state)
 
-                    # Mask the component
+                    # info mask the component
                     if comp_type == 'attention' and head_idx is not None:
-                        # Mask specific attention head
+                        # info mask specific attention head
                         head_dim = self.model.dim // self.model.num_heads
                         start_idx = head_idx * head_dim
                         end_idx = (head_idx + 1) * head_dim
 
                         with torch.no_grad():
-                            # Zero out this head's contribution in the output projection
+                            # info zero out this head's contribution in the output projection
                             self.model.layers[layer_idx].attn.out_proj.weight[:, start_idx:end_idx] = 0
 
                     elif comp_type == 'mlp':
-                        # Mask entire MLP
+                        # info mask entire MLP
                         with torch.no_grad():
-                            # Zero out MLP weights
+                            # info zero out MLP weights
                             if hasattr(self.model.layers[layer_idx].mlp, '0'):
-                                # Sequential MLP
+                                # info sequential MLP
                                 self.model.layers[layer_idx].mlp[0].weight.fill_(0)
                                 self.model.layers[layer_idx].mlp[2].weight.fill_(0)
                             else:
-                                # Named MLP
+                                # info named MLP
                                 self.model.layers[layer_idx].mlp.up_proj.weight.fill_(0)
                                 self.model.layers[layer_idx].mlp.down_proj.weight.fill_(0)
 
-                    # Evaluate with component masked
+                    # info evaluate with component masked
                     ablated_acc, ablated_loss = self.model.evaluate(eval_loader)
 
-                    # Calculate attribution
+                    # info calculate attribution
                     attribution = baseline_acc - ablated_acc
 
-                    # Store results
+                    # info store results
                     component_key = f"{comp_type}_{layer_idx}"
                     if head_idx is not None:
                         component_key += f"_head_{head_idx}"
 
                     component_attribution[component_key] = attribution
 
-                # Identify circuit components based on attribution threshold
+                # info identify circuit components based on attribution threshold
                 circuit_components = {k: v for k, v in component_attribution.items()
                                       if v >= circuit_threshold}
 
-                # Sort by attribution
+                # info sort by attribution
                 sorted_components = sorted(circuit_components.items(),
                                            key=lambda x: x[1],
                                            reverse=True)
 
-                # Analyze pairwise interactions
+                # info analyze pairwise interactions
                 pairwise_interactions = {}
 
-                # Only analyze if we have at least 2 components
+                # info only analyze if we have at least 2 components
                 component_keys = list(circuit_components.keys())
                 if len(component_keys) >= 2:
                     for i, comp1 in enumerate(component_keys):
                         for comp2 in component_keys[i + 1:]:
-                            # Load post-jump state
+                            # info load post-jump state
                             self.model.load_state_dict(post_jump_state)
 
-                            # Parse component keys
+                            # info parse component keys
                             comp1_parts = comp1.split('_')
                             comp2_parts = comp2.split('_')
 
-                            # Mask both components
+                            # info mask both components
                             self._mask_component(self.model, comp1_parts)
                             self._mask_component(self.model, comp2_parts)
 
-                            # Evaluate with both components masked
+                            # info evaluate with both components masked
                             pair_ablated_acc, pair_ablated_loss = self.model.evaluate(eval_loader)
 
-                            # Calculate interaction effect
+                            # info calculate interaction effect
                             expected_attribution = circuit_components[comp1] + circuit_components[comp2]
                             actual_attribution = baseline_acc - pair_ablated_acc
 
-                            # Measure super-additive effects (positive indicates circuit-like behavior)
+                            # info measure super-additive effects (positive indicates circuit-like behavior)
                             interaction = actual_attribution - expected_attribution
 
                             pairwise_interactions[f"{comp1}+{comp2}"] = {
@@ -1521,7 +1521,7 @@ class AttentionMLPAnalyzer:
                                 'is_circuit': interaction > 0.01  # Positive interaction indicates circuit
                             }
 
-                # Store circuit analysis
+                # info store circuit analysis
                 circuit_analysis[jump_epoch] = {
                     'component_attribution': component_attribution,
                     'circuit_components': circuit_components,
@@ -1529,11 +1529,11 @@ class AttentionMLPAnalyzer:
                     'pairwise_interactions': pairwise_interactions
                 }
 
-                # Create circuit visualization
+                # info create circuit visualization
                 self._visualize_circuit_analysis(jump_epoch, circuit_analysis[jump_epoch])
 
             finally:
-                # Restore original model state
+                # info restore original model state
                 self.model.load_state_dict(original_state)
 
         return circuit_analysis
@@ -1545,7 +1545,7 @@ class AttentionMLPAnalyzer:
             if 'head' in component_parts:
                 head_idx = int(component_parts[component_parts.index('head') + 1])
 
-                # Mask specific attention head
+                # info mask specific attention head
                 head_dim = model.dim // model.num_heads
                 start_idx = head_idx * head_dim
                 end_idx = (head_idx + 1) * head_dim
@@ -1556,15 +1556,15 @@ class AttentionMLPAnalyzer:
         elif 'mlp' in component_parts:
             layer_idx = int(component_parts[component_parts.index('mlp') + 1])
 
-            # Mask entire MLP
+            # info mask entire MLP
             with torch.no_grad():
-                # Zero out MLP weights
+                # info zero out MLP weights
                 if hasattr(model.layers[layer_idx].mlp, '0'):
-                    # Sequential MLP
+                    # info sequential MLP
                     model.layers[layer_idx].mlp[0].weight.fill_(0)
                     model.layers[layer_idx].mlp[2].weight.fill_(0)
                 else:
-                    # Named MLP
+                    # info named MLP
                     model.layers[layer_idx].mlp.up_proj.weight.fill_(0)
                     model.layers[layer_idx].mlp.down_proj.weight.fill_(0)
 
@@ -1577,7 +1577,7 @@ class AttentionMLPAnalyzer:
         viz_dir = self.save_dir / "circuit_analysis"
         viz_dir.mkdir(exist_ok=True, parents=True)
 
-        # 1. Component Attribution Bar Chart
+        # info 1. component Attribution Bar Chart
         if circuit_data['component_attribution']:
             components = []
             attributions = []
@@ -1587,7 +1587,7 @@ class AttentionMLPAnalyzer:
                 components.append(comp)
                 attributions.append(attr)
 
-            # Create bar chart
+            # info create bar chart
             plt.figure(figsize=(12, 6))
             plt.bar(components, attributions)
             plt.axhline(y=0.01, color='r', linestyle='--', label='Threshold')
@@ -1599,36 +1599,36 @@ class AttentionMLPAnalyzer:
             plt.savefig(viz_dir / f"jump_{jump_epoch}_component_attribution.png")
             plt.close()
 
-        # 2. Circuit Interaction Network Graph
+        # info 2. circuit Interaction Network Graph
         if circuit_data['pairwise_interactions']:
             plt.figure(figsize=(10, 8))
 
-            # Create a graph
+            # info create a graph
             G = nx.Graph()
 
-            # Add nodes for circuit components
+            # info add nodes for circuit components
             for comp in circuit_data['circuit_components']:
                 attr_score = circuit_data['component_attribution'][comp]
                 G.add_node(comp, weight=attr_score)
 
-            # Add edges for interactions
+            # info add edges for interactions
             for pair, data in circuit_data['pairwise_interactions'].items():
                 comp1, comp2 = pair.split('+')
 
                 if data['is_circuit']:
-                    # Only add edges for positive interactions (circuit-like behavior)
+                    # info only add edges for positive interactions (circuit-like behavior)
                     G.add_edge(comp1, comp2, weight=data['interaction'])
 
-            # Set node sizes based on attribution
+            # info set node sizes based on attribution
             node_sizes = [G.nodes[node]['weight'] * 5000 for node in G.nodes]
 
-            # Set edge widths based on interaction strength
+            # info set edge widths based on interaction strength
             edge_widths = [G[u][v]['weight'] * 10 for u, v in G.edges]
 
-            # Position nodes using spring layout
+            # info position nodes using spring layout
             pos = nx.spring_layout(G, seed=42)
 
-            # Draw the graph
+            # info draw the graph
             nx.draw_networkx_nodes(G, pos, node_size=node_sizes, alpha=0.8,
                                    node_color='lightblue')
             nx.draw_networkx_edges(G, pos, width=edge_widths, alpha=0.5,
@@ -1641,11 +1641,11 @@ class AttentionMLPAnalyzer:
             plt.savefig(viz_dir / f"jump_{jump_epoch}_circuit_network.png")
             plt.close()
 
-        # 3. Heatmap of Pairwise Interactions
+        # info 3. heatmap of Pairwise Interactions
         if circuit_data['pairwise_interactions']:
             import pandas as pd
 
-            # Extract interaction values
+            # info extract interaction values
             pairs = []
             interactions = []
 
@@ -1654,14 +1654,14 @@ class AttentionMLPAnalyzer:
                 pairs.append(pair)
                 interactions.append(data['interaction'])
 
-            # Create a matrix representation
+            # info create a matrix representation
             unique_comps = sorted(list(circuit_data['circuit_components'].keys()))
             n_comps = len(unique_comps)
 
             if n_comps > 1:
                 interaction_matrix = np.zeros((n_comps, n_comps))
 
-                # Fill in the matrix
+                # info fill in the matrix
                 for pair, data in circuit_data['pairwise_interactions'].items():
                     comp1, comp2 = pair.split('+')
 
@@ -1671,7 +1671,7 @@ class AttentionMLPAnalyzer:
                     interaction_matrix[i, j] = data['interaction']
                     interaction_matrix[j, i] = data['interaction']  # Symmetric
 
-                # Create heatmap
+                # info create heatmap
                 plt.figure(figsize=(10, 8))
                 sns.heatmap(interaction_matrix, annot=True, fmt=".3f",
                             xticklabels=unique_comps, yticklabels=unique_comps,
@@ -1684,7 +1684,7 @@ class AttentionMLPAnalyzer:
 
 
 
-# Define the SparseAutoencoder class that was referenced
+# info define the SparseAutoencoder class that was referenced
 class SparseAutoencoder(torch.nn.Module):
     """
     Sparse autoencoder for analyzing neural network representations.
@@ -1705,13 +1705,13 @@ class SparseAutoencoder(torch.nn.Module):
         self.code_dim = code_dim
         self.l1_coef = l1_coef
 
-        # Encoder (input -> code)
+        # info encoder (input -> code)
         self.encoder = torch.nn.Linear(input_dim, code_dim, bias=True)
 
-        # Decoder (code -> reconstruction)
+        # info decoder (code -> reconstruction)
         self.decoder = torch.nn.Linear(code_dim, input_dim, bias=True)
 
-        # Initialize weights
+        # info initialize weights
         self._init_weights()
 
     def _init_weights(self):
@@ -1731,10 +1731,10 @@ class SparseAutoencoder(torch.nn.Module):
         Returns:
             tuple: (reconstruction, code)
         """
-        # Encode (ReLU activation for non-negative codes)
+        # info encode (ReLU activation for non-negative codes)
         code = torch.nn.functional.relu(self.encoder(x))
 
-        # Decode
+        # info decode
         reconstruction = self.decoder(code)
 
         return reconstruction, code
@@ -1775,7 +1775,7 @@ class SparseAutoencoder(torch.nn.Module):
         """
         return self.decoder(code)
 
-# Example usage of the complete framework
+# info example usage of the complete framework
 def analyze_model_across_grokking(model_path, pre_grokking_ckpt, during_grokking_ckpt,
                                   post_grokking_ckpt, train_loader, eval_loader, device="cuda"):
     """
@@ -1797,7 +1797,7 @@ def analyze_model_across_grokking(model_path, pre_grokking_ckpt, during_grokking
     model = torch.load(model_path)
     model.to(device)
 
-    # Create analyzer
+    # info create analyzer
     analyzer = AttentionMLPAnalyzer(
         model=model,
         eval_loader=eval_loader,
@@ -1805,34 +1805,34 @@ def analyze_model_across_grokking(model_path, pre_grokking_ckpt, during_grokking
         save_dir="grokking_analysis_results"
     )
 
-    # Define phase checkpoints
+    # info define phase checkpoints
     phase_checkpoints = [
         ("pre_grokking", pre_grokking_ckpt),
         ("during_transition", during_grokking_ckpt),
         ("post_grokking", post_grokking_ckpt)
     ]
 
-    # Run analysis across phases
+    # info run analysis across phases
     phase_analysis = analyzer.analyze_across_grokking_phases(
         phase_checkpoints=phase_checkpoints
     )
 
-    # Create sparse autoencoders for each phase
+    # info create sparse autoencoders for each phase
     autoencoder_results = {}
 
     for phase_name, ckpt_path in phase_checkpoints:
         print(f"Training sparse autoencoder for {phase_name} phase...")
 
-        # Load checkpoint
+        # info load checkpoint
         checkpoint = torch.load(ckpt_path)
         model.load_state_dict(checkpoint["model_state_dict"])
 
-        # Create autoencoder
+        # info create autoencoder
         hidden_dim = model.dim  # Assuming this is the hidden dimension
         code_dim = hidden_dim * 2  # Make code dimension larger
         autoencoder = analyzer.create_sparse_autoencoder(hidden_dim, code_dim)
 
-        # Analyze MLP layer
+        # info analyze MLP layer
         mlp_results = analyzer.analyze_with_sparse_autoencoder(
             autoencoder=autoencoder,
             component='mlp',
@@ -1840,7 +1840,7 @@ def analyze_model_across_grokking(model_path, pre_grokking_ckpt, during_grokking
             train_epochs=50
         )
 
-        # Visualize results
+        # info visualize results
         mlp_vis = analyzer.visualize_autoencoder_results(
             results=mlp_results,
             component='mlp',
@@ -1848,16 +1848,16 @@ def analyze_model_across_grokking(model_path, pre_grokking_ckpt, during_grokking
             epoch=phase_name
         )
 
-        # Store results
+        # info store results
         autoencoder_results[f"{phase_name}_mlp"] = {
             'analysis': mlp_results,
             'visualizations': mlp_vis
         }
 
-        # Create new autoencoder for attention
+        # info create new autoencoder for attention
         autoencoder = analyzer.create_sparse_autoencoder(hidden_dim, code_dim)
 
-        # Analyze attention layer
+        # info analyze attention layer
         attn_results = analyzer.analyze_with_sparse_autoencoder(
             autoencoder=autoencoder,
             component='attention',
@@ -1865,7 +1865,7 @@ def analyze_model_across_grokking(model_path, pre_grokking_ckpt, during_grokking
             train_epochs=50
         )
 
-        # Visualize results
+        # info visualize results
         attn_vis = analyzer.visualize_autoencoder_results(
             results=attn_results,
             component='attention',
@@ -1873,7 +1873,7 @@ def analyze_model_across_grokking(model_path, pre_grokking_ckpt, during_grokking
             epoch=phase_name
         )
 
-        # Store results
+        # info store results
         autoencoder_results[f"{phase_name}_attention"] = {
             'analysis': attn_results,
             'visualizations': attn_vis

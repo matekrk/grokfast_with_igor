@@ -1,6 +1,6 @@
 from analysis.analyzers.base_analyzer import BaseAnalyzer
-from analysis.visualization.model_visualizer import visualize_model_analysis
-from pathlib import Path
+# from analysis.visualization.model_visualizer import visualize_model_analysis
+# from pathlib import Path
 
 
 class PhaseTransitionAnalyzer(BaseAnalyzer):
@@ -288,7 +288,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
         """
         import matplotlib.pyplot as plt
         import seaborn as sns
-        import numpy as np
+        # import numpy as np
         import pandas as pd
 
         transition_epoch = transition['epoch']

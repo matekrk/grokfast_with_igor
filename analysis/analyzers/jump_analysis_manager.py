@@ -1,5 +1,5 @@
 # analyzers/jump_analysis_manager.py
-import torch
+# import torch
 from pathlib import Path
 
 from analysis.analyzers.loss_landscape_analyzer import LossLandscapeAnalyzer
@@ -61,9 +61,9 @@ class JumpAnalysisManager:
         # Prepare the complete results structure
         results = {
             'jump_epoch': jump_epoch,
-            'pre_jump_epoch': pre_jump_snapshot['epoch'],
-            'jump_epoch': jump_snapshot['epoch'],
-            'post_jump_epoch': post_jump_snapshot['epoch'],
+            'pre_jump': pre_jump_snapshot['epoch'],
+            'jump': jump_snapshot['epoch'],
+            'post_jump': post_jump_snapshot['epoch'],
         }
 
         # 1. Analyze loss landscape

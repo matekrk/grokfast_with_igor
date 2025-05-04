@@ -34,16 +34,19 @@ class AttributionAnalyzer(BaseAnalyzer):
 
         pre_jump_snapshot, jump_snapshot, post_jump_snapshot = snapshots
 
-        # Analyze attribution for each snapshot
+        # info analyze attribution for each snapshot
         results = {
             'jump_epoch': jump_epoch,
-            'pre_jump_epoch': pre_jump_snapshot['epoch'],
-            'jump_epoch': jump_snapshot['epoch'],
-            'post_jump_epoch': post_jump_snapshot['epoch'],
+            # 'pre_jump_epoch': pre_jump_snapshot['epoch'],
+            # 'jump_epoch': jump_snapshot['epoch'],
+            # 'post_jump_epoch': post_jump_snapshot['epoch'],
+            'pre_jump': pre_jump_snapshot['epoch'],
+            'jump': jump_snapshot['epoch'],
+            'post_jump': post_jump_snapshot['epoch'],
             'attribution_analysis': {}
         }
 
-        # Store original model state
+        # info store original model state
         original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
         try:
