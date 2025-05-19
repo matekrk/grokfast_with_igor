@@ -108,7 +108,7 @@ class AttentionAnalyzer(BaseAnalyzer):
                 break
 
         if jump_idx is None:
-            print(f"No snapshot found for jump at epoch {jump_epoch}")
+            print(f"\tAttentionAnalyzer._find_jump_snapshots()\tNo snapshot found for jump at epoch {jump_epoch}")
             return None
 
         # Get snapshots around the jump
@@ -120,7 +120,7 @@ class AttentionAnalyzer(BaseAnalyzer):
 
         # Handle case where after_idx points to jump_epoch
         if after_epoch == jump_epoch and ensure_after_snapshot:
-            print(f"No post-jump snapshot available for epoch {jump_epoch}")
+            print(f"\tAttentionAnalyzer._find_jump_snapshots()\tNo post-jump snapshot available for epoch {jump_epoch}")
             return None
 
         pre_jump_snapshot = weight_tracker.weight_snapshots[before_idx]
@@ -329,4 +329,27 @@ class AttentionAnalyzer(BaseAnalyzer):
             'patterns': patterns,
             'layer_avg_entropy': avg_layer_entropy
         }
-    
+
+
+    def cleanup(self):
+        """Release memory held by various analyzers"""
+        # Clear cached activations
+        self.layer_activations = {}
+
+        # Clear large stored tensors
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, dict) and any(isinstance(v, (torch.Tensor, np.ndarray))
+                                              for v in attr.values() if hasattr(attr, 'values')):
+                setattr(self, attr_name, {})
+
+        # Call torch.cuda.empty_cache() if using GPU
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Call cleanup on child analyzers
+        for analyzer_name in ['mlp_sparsity_tracker', 'circuit_class_analyzer', 'interaction_analyzer']:
+            if hasattr(self, analyzer_name):
+                analyzer = getattr(self, analyzer_name)
+                if hasattr(analyzer, 'cleanup'):
+                    analyzer.cleanup()

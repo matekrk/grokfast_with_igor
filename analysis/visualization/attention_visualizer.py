@@ -68,7 +68,7 @@ def plot_attention_patterns(model, input_data=None, fig=None):
 
                 ax.set_title(f'L{layer_idx}, H{head_idx}')
 
-    fig.suptitle('Attention Patterns', y=1.02)
+    plt.suptitle('Attention Patterns', y=1.02)
     fig.tight_layout()
     return fig
 

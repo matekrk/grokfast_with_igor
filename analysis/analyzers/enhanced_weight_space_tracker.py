@@ -259,7 +259,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         snapshots = self.get_window_snapshots(jump_epoch, window_size)
 
         if len(snapshots) < 3:
-            print(f"Not enough snapshots around jump at epoch {jump_epoch}")
+            print(f"\tEnhancedWeightSpaceTracker.analyze_extended_jump Not enough snapshots around jump at epoch {jump_epoch}")
             return None
 
         # info calculate change trajectory
@@ -325,7 +325,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         # info get epoch numbers for epochs in jump window
         for pending_jump in self.pending_jumps:
             jump_epoch = pending_jump['jump_epoch']
-            print(f"analyzing jump at epoch {jump_epoch}")
+            print(f"\tEnhancedWeightSpaceTracker.analyze_pending_jumps: analyzing jump at epoch {jump_epoch}")
 
             # info get pre jump epoch and state
             # fixme mini_train_steps
@@ -415,16 +415,16 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                                          f'jump_{jump_epoch}_top_head_{head}',
                                          jump_char['head_changes'][head]['pre_to_jump'])
 
-            print(f"Jump at {jump_epoch} characterized:")
-            print(f"  - Pre-jump epoch: {pre_jump_epoch}")
-            print(f"  - Post-jump epoch: {post_jump_snapshot['epoch']}")
-            print(f"  - Total change magnitude: {jump_char['total_magnitude']['pre_to_jump']:.4f}")
-            print(f"  - Top changing layers: {', '.join(jump_char['top_layers'])}")
-            print(f"  - Top changing heads: {', '.join(jump_char['top_heads'])}")
+            print(f"\tEnhancedWeightSpaceTracker.analyze_pending_jumps Jump at {jump_epoch} characterized:")
+            print(f"\t\t  - Pre-jump epoch: {pre_jump_epoch}")
+            print(f"\t\t  - Post-jump epoch: {post_jump_snapshot['epoch']}")
+            print(f"\t\t  - Total change magnitude: {jump_char['total_magnitude']['pre_to_jump']:.4f}")
+            print(f"\t\t  - Top changing layers: {', '.join(jump_char['top_layers'])}")
+            print(f"\t\t  - Top changing heads: {', '.join(jump_char['top_heads'])}")
 
             ########################################################################################################
             # info now we have balanced pre_jump, jump, and post_jump snapshots
-            print(f"Analyzing jump at {jump_epoch} with pre={pre_jump_epoch}, post={post_jump_snapshot['epoch']}")
+            print(f"\tEnhancedWeightSpaceTracker.analyze_pending_jumps Analyzing jump at {jump_epoch} with pre={pre_jump_epoch}, post={post_jump_snapshot['epoch']}")
 
             # info analysis with these snapshots
             analyzer_result = {}
@@ -925,7 +925,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
             # info log the jump
             if self.logger:
                 self.logger.log_data('weight_space_jumps', 'jump_epochs', epoch)
-                self.logger.log_data('weight_space_jumps', 'jump_velocity_norms', current_velocity_norm)
+                # self.logger.log_data('weight_space_jumps', 'jump_velocity_norms', current_velocity_norm)
                 self.logger.log_data('weight_space_jumps', 'jump_z_scores', robust_z_score)
                 self.logger.log_data('weight_space_jumps', 'jump_types', jump_type)
 
@@ -942,14 +942,14 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         jump_indices = [i for i, e in enumerate(self.weight_timestamps) if e == jump_epoch]
 
         if not jump_indices:
-            print(f"Warning: Jump detected at epoch {jump_epoch} but no corresponding weight snapshot found")
+            print(f"\tEnhancedWeightSpaceTracker._analyze_jump: Warning: Jump detected at epoch {jump_epoch} but no corresponding weight snapshot found")
             return
 
         jump_idx = jump_indices[0]
 
         # We need snapshots before and after the jump for comparison
         if jump_idx == 0 or jump_idx >= len(self.weight_snapshots) - 1:
-            print(f"Warning: Jump at index {jump_idx} is at the boundary of available snapshots")
+            print(f"\tEnhancedWeightSpaceTracker._analyze_jump Warning: Jump at index {jump_idx} is at the boundary of available snapshots")
             return
 
         # Get snapshots before and after jump
@@ -1082,7 +1082,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
             ax.set_ylabel(f'PCA Dimension 2 ({self.pca.explained_variance_ratio_[1]:.2%} var)')
             ax.set_title(f'Weight Space Trajectory Around Jump at Epoch {jump_epoch}')
 
-            # fig.suptitle(f"{self.model.plot_prefix}")
+            plt.suptitle(f"{self.model.plot_prefix}")
             # Save the figure
             plt.tight_layout()
             fig.savefig(self.jump_dir / f"{jump_id}_pca_trajectory.png")
@@ -1152,6 +1152,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
             ax_svd.set_ylabel('Change Magnitude')
             ax_svd.set_xticklabels(ax_svd.get_xticklabels(), rotation=45, ha='right')
 
+            plt.suptitle(f"{self.model.plot_prefix}")
             plt.tight_layout()
             plt.savefig(viz_dir / f"{prefix}_structural_changes.png")
             plt.close(fig_svd)
@@ -1197,7 +1198,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         ax1.set_ylabel('Change Magnitude')
         ax1.set_xticklabels(ax1.get_xticklabels(), rotation=45, ha='right')
 
-        fig1.suptitle(f"{self.model.plot_prefix}")
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         plt.savefig(viz_dir / f"{prefix}_component_changes.png")
         plt.close(fig1)
@@ -1263,7 +1264,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         ax3.set_ylabel('Change Magnitude')
         ax3.set_xticklabels(ax3.get_xticklabels(), rotation=45, ha='right')
 
-        fig2.suptitle(f"{self.model.plot_prefix}")
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         plt.savefig(viz_dir / f"{prefix}_layer_head_changes.png")
         plt.close(fig2)
@@ -1295,7 +1296,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                 ax4.set_ylabel('Change Value')
                 ax4.set_xticklabels(ax4.get_xticklabels(), rotation=45, ha='right')
 
-                fig3.suptitle(f"{self.model.plot_prefix}")
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.tight_layout()
                 plt.savefig(viz_dir / f"{prefix}_spectral_changes.png")
 
@@ -1332,7 +1333,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                 ax_size.set_xlabel('Layer')
                 ax_size.set_ylabel('Size-Normalized Change')
 
-                fig_size.suptitle(f"{self.model.plot_prefix}")
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.tight_layout()
                 plt.savefig(viz_dir / f"{prefix}_size_normalized_changes.png")
                 plt.close(fig_size)
@@ -1380,7 +1381,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         ax2.legend()
 
         # Save the figure
-        fig.suptitle(f"{self.model.plot_prefix}")
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         fig.savefig(self.jump_dir / f"{jump_id}_layer_changes.png")
         plt.close(fig)
@@ -1705,7 +1706,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         ax2.set_ylabel('Velocity Norm')
         ax2.set_title('Weight Space Velocities and Detected Jumps')
 
-        fig.suptitle(f"{self.model.plot_prefix}")
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         fig.savefig(self.save_dir / f"weight_space_jumps_timeline.png")
         plt.close(fig)
@@ -1833,7 +1834,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
 
             ax2.set_title(f'Weight Space Velocity and Acceleration')
 
-        fig.suptitle(f"{self.model.plot_prefix}")
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.tight_layout()
         save_path = self.save_dir / f'weight_trajectory_with_jumps_dims_{selected_dims[0]}_{selected_dims[1]}.png'
         plt.savefig(save_path)
@@ -1857,7 +1858,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         self._ensure_pca_fitted()
 
         if not self.pca_fitted:
-            print("Not enough data to fit PCA. Need at least 3 weight snapshots.")
+            print("\tEnhancedWeightSpaceTracker.analyze_phase_weight_spaces Not enough data to fit PCA. Need at least 3 weight snapshots.")
             return None
 
         # Get phase structure and transitions from analyzer
@@ -2130,6 +2131,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         ax1.set_title('Weight Space Trajectory with Phase Transitions')
 
         plt.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.savefig(self.save_dir / "phase_weight_spaces_3d.png")
         plt.close(fig1)
 
@@ -2174,6 +2176,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                 sns.barplot(x='layer', y='total', hue='phase', data=df, ax=axes[1, 1])
                 axes[1, 1].set_title('Total Layer Weight Norms by Phase')
 
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.tight_layout()
                 plt.savefig(self.save_dir / "phase_layer_norms_comparison.png")
                 plt.close(fig2)
@@ -2237,6 +2240,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                 axes[1].axvline(x=grok_epoch, color='g', linestyle='-', alpha=0.5)
 
             plt.tight_layout()
+            plt.suptitle(f"{self.model.plot_prefix}")
             plt.savefig(self.save_dir / "phase_svd_analysis.png")
             plt.close(fig3)
 
@@ -2280,5 +2284,29 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                     axes[1].axvline(x=grok_epoch, color='g', linestyle='-', alpha=0.5)
 
                 plt.tight_layout()
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.savefig(self.save_dir / "phase_functional_analysis.png")
                 plt.close(fig4)
+
+    def cleanup(self):
+        """Release memory held by various analyzers"""
+        # Clear cached activations
+        self.layer_activations = {}
+
+        # Clear large stored tensors
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, dict) and any(isinstance(v, (torch.Tensor, np.ndarray))
+                                              for v in attr.values() if hasattr(attr, 'values')):
+                setattr(self, attr_name, {})
+
+        # Call torch.cuda.empty_cache() if using GPU
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Call cleanup on child analyzers
+        for analyzer_name in ['mlp_sparsity_tracker', 'circuit_class_analyzer', 'interaction_analyzer']:
+            if hasattr(self, analyzer_name):
+                analyzer = getattr(self, analyzer_name)
+                if hasattr(analyzer, 'cleanup'):
+                    analyzer.cleanup()

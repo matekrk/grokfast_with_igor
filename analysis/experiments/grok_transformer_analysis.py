@@ -10,58 +10,14 @@ from torch import optim
 # warning is this import OK?
 from analysis.models.analysis_transformer import Decoder
 from analysis.models.modular_data import create_modular_dataloaders
-from analysis.trainers.analysis import train_with_analysis
-from analysis.trainers.enhanced_analysis import train_with_enhanced_analysis
-from analysis.trainers.train_phase_analysis import train_with_phase_analysis
+from analysis.staged_experiment import staged_experiment_framework
 from analysis.utils.checkpoint_manager import GrokAwareCheckpointManager
+from analysis.utils.utils import create_model, create_optimizer, create_scheduler, find_closest_jump
 from analysis.visualization.visualize_phases_anthropic_style import create_phase_visualizations
 
-
-def create_model(embedding, num_layers, heads_per_layer, batch_size,
-                 operation, num_tokens, seq_len, ratio,
-                 criterion, device,
-                 optimizer_name, scheduler_name,
-                 learning_rate, weight_decay,
-                 base_dir="results", init_xavier=False,
-                 ):
-    ff = datetime.now().strftime("%f")
-    xavier = '_xavier' if init_xavier else ''
-    sched = '_sched' if init_xavier else '_nosched'
-    optim = f'_{optimizer_name}' if optimizer_name else ''
-    sched = f'_{scheduler_name}' if scheduler_name else ''
-    lr = f'_lr{learning_rate}' if learning_rate > 0 else ''
-    wd = f'_wd{weight_decay:.1g}' if weight_decay > 0 else ''
-    id = f"l{num_layers}_h{heads_per_layer}_e{embedding}_b{batch_size}_{operation[:4]}-{num_tokens - 2}{xavier}{optim}{lr}{wd}{sched}_r{ratio}_{ff}"
-
-    # info save_dir
-    save_dir = Path(base_dir) / f"{id}"
-    save_dir.mkdir(exist_ok=True)
-
-    # info checkpoint saves
-    checkpoint_dir = Path(save_dir) / f"checkpoints"
-    checkpoint_dir.mkdir(exist_ok=True)
-
-    # info stats directory
-    stats_dir = Path(save_dir) / "stats"
-    stats_dir.mkdir(exist_ok=True)
-
-    model = Decoder(
-        dim=embedding,
-        num_layers=num_layers,
-        num_heads=heads_per_layer,
-        num_tokens=num_tokens,
-        seq_len=seq_len,
-        criterion=criterion,
-        device=device,
-        id=id,
-        save_dir=save_dir,
-        checkpoint_dir=checkpoint_dir,
-    )
-    model.to(device)
-    if init_xavier:
-        model.apply_xavier_init()
-
-    return model, save_dir, checkpoint_dir, stats_dir
+from analysis.trainers.analysis import train_with_analysis
+from analysis.trainers.train_enhanced_weight_analysis import train_with_enhanced_analysis
+from analysis.trainers.train_phase_analysis import train_with_phase_analysis, train_with_enhanced_phase_analysis
 
 
 def main(args=None):
@@ -89,26 +45,6 @@ def main(args=None):
         init_xavier=False,
     )
 
-    # Choose optimizer
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    if args.optimizer.lower() == 'sgd':
-        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    elif args.optimizer.lower() == 'adam':
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    elif args.optimizer.lower() == 'adamw':
-        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    else:
-        ValueError("Optimizer '{}' not recognized".format(args.optimizer))
-
-    if args.scheduler is not None:
-        scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, lambda update: 1 if update > 10 else update / 10
-        )
-    else:
-        scheduler = None
-
-    modulus = args.p
-
     if args.operation.startswith('mult'):
         operation = "multiply"
     elif args.operation.startswith('divide'):
@@ -122,13 +58,33 @@ def main(args=None):
     else:
         operation = "multiply"
 
+    config = {
+        'optimizer': args.optimizer,
+        'scheduler': args.scheduler,
+        'lr': args.lr,
+        'weight_decay': args.weight_decay,
+        'scheduler': args.scheduler,
+        'operation': operation,
+        'modulus': args.p,
+        'train_ratio': args.train_ratio,
+        'batch_size': args.batch_size,
+        'num_heads': args.num_heads,
+        'num_layers': args.num_layers,
+        'heads_per_layer': args.num_heads,
+        'seed': args.seed,
+    }
+    # Choose optimizer
+    optimizer = create_optimizer(model=model, config=config)
+    config['optimizer'] = optimizer
+    scheduler = create_scheduler(config=config)
+
     train_loader, eval_loader, vocab_size, dataset_split_indices = create_modular_dataloaders(
-        modulus=modulus,
-        op=operation,
-        train_ratio=args.train_ratio,
-        batch_size=args.batch_size,
+        modulus=config['modulus'],
+        op=config['operation'],
+        train_ratio=config['train_ratio'],
+        batch_size=config['batch_size'],
         sequence_format=True,
-        seed=args.seed
+        seed=config['seed'],
     )
 
     checkpointManager = GrokAwareCheckpointManager(
@@ -140,24 +96,20 @@ def main(args=None):
         checkpoint_dir=checkpoint_dir,
         stats_dir=stats_dir,
         save_freq=args.checkpoint_interval,
-        grokking_window=120,    # Save checkpoints 50 epochs before/after grokking
-        max_to_keep=5,          # maximum number of checkpoint files (groups) to keep
+        grokking_window=40,  # Save checkpoints 50 epochs before/after grokking
+        max_to_keep=5,  # maximum number of checkpoint files (groups) to keep
     )
 
-    if args.mode == 'enhanced':
-        model, weight_tracker, jump_analyzer = main_with_enhanced_tracking(
-            args,
-            model=model,
-            train_loader=train_loader,
-            eval_loader=eval_loader,
-            criterion=criterion,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            device=device,
-            checkpointManager=checkpointManager,
-            dataset_split_indices=dataset_split_indices
-        )
-    elif args.mode == 'phase':
+    if args.mode == 'enhanced' and args.type == 'weight':
+        model, weight_tracker, jump_analyzer = main_with_enhanced_weight_tracking(args, model=model,
+                                                                                  train_loader=train_loader,
+                                                                                  eval_loader=eval_loader,
+                                                                                  criterion=criterion,
+                                                                                  optimizer=optimizer,
+                                                                                  scheduler=scheduler, device=device,
+                                                                                  checkpointManager=checkpointManager,
+                                                                                  dataset_split_indices=dataset_split_indices)
+    elif args.mode == 'default' and args.mode == 'phase':
         model, weight_tracker, phase_analyzer, phase_weight_analysis = main_with_phase_tracking(
             args,
             model=model,
@@ -169,6 +121,21 @@ def main(args=None):
             device=device,
             checkpointManager=checkpointManager,
             dataset_split_indices=dataset_split_indices,
+        )
+    elif args.mode == 'enhanced' and args.type == 'phase':
+        model, weight_tracker, phase_analyzer, phase_weight_analysis = main_with_enhanced_phase_tracking(
+            args,
+            model=model,
+            train_loader=train_loader,
+            eval_loader=eval_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            checkpointManager=checkpointManager,
+            dataset_split_indices=dataset_split_indices,
+            # jump_analyzer=jump_analyzer,
+            # phase_weight_analysis=phase_weight_analysis,
         )
     else:
         model = main_with_analysis(
@@ -242,13 +209,53 @@ def main_with_phase_tracking(args, model, train_loader, eval_loader, criterion,
     return model, weight_tracker, phase_analyzer, phase_weight_analysis
 
 
+def main_with_enhanced_phase_tracking(args, model, train_loader, eval_loader, criterion,
+                                      optimizer, scheduler, device,
+                                      dataset_split_indices, checkpointManager):
+    model, weight_tracker, enhanced_phase_analyzer, phase_weight_analysis = train_with_enhanced_phase_analysis(
+        model=model,
+        train_loader=train_loader,
+        eval_loader=eval_loader,
+        dataset_split_indices=dataset_split_indices,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+        checkpointManager=checkpointManager,
+        epochs=args.epochs,
+        log_interval=args.log_interval,
+        analyze_interval=args.analyze_interval,
+        checkpoint_interval=args.checkpoint_interval,
+        # jump_detection_threshold=args.jump_detection_threshold,
+        # circuit_sampling_freq=args.circuit_sampling_freq,
+        # sparsity_threshold=args.sparsity_threshold,
+    )
+    # info get learning phase summary
+    summary = enhanced_phase_analyzer.get_learning_phase_summary()
+
+    # info print insights
+    print("\t\tLearning Phase Insights:")
+    for insight in summary['insights']:
+        print(f"\t\t{insight}")
+
+    # info create the complete set of visualizations
+    visualization_results = create_phase_visualizations(
+        model=model,
+        phase_analyzer=enhanced_phase_analyzer,
+        weight_tracker=weight_tracker,
+        save_dir=model.save_dir / "phase_visualizations"
+    )
+
+    return model, weight_tracker, enhanced_phase_analyzer, phase_weight_analysis
+
+
 # def main_with_enhanced_tracking(args):
-def main_with_enhanced_tracking(args, model, train_loader, eval_loader,
-                                criterion, optimizer, scheduler,  # checkpoint_dir, stats_dir,
-                                device,  # checkpoint_interval,
-                                checkpointManager,
-                                # vocab_size,
-                                dataset_split_indices):
+def main_with_enhanced_weight_tracking(args, model, train_loader, eval_loader,
+                                       criterion, optimizer, scheduler,  # checkpoint_dir, stats_dir,
+                                       device,  # checkpoint_interval,
+                                       checkpointManager,
+                                       # vocab_size,
+                                       dataset_split_indices):
     # Use the enhanced training function
     model, weight_tracker, jump_analyzer = train_with_enhanced_analysis(
         model=model,
@@ -284,15 +291,82 @@ def main_with_enhanced_tracking(args, model, train_loader, eval_loader,
     return model, weight_tracker, jump_analyzer
 
 
-def find_closest_jump(jump_epochs, target_epoch):
-    """Find the jump epoch closest to the target epoch"""
-    return jump_epochs[np.argmin(np.abs(np.array(jump_epochs) - target_epoch))]
+def main_with_staged_analysis(args):
+    """Run experiment with staged analysis"""
+    # Base configuration
+    base_config = {
+        'embedding': args.embedding,
+        'num_layers': args.num_layers,
+        'num_heads': args.num_heads,
+        'operation': args.operation,
+        'p': args.p,
+        'batch_size': args.batch_size,
+        'criterion': nn.CrossEntropyLoss(),
+        'optimizer': args.optimizer,
+        'scheduler': args.scheduler,
+        'lr': args.lr,
+        'weight_decay': args.weight_decay,
+        'train_ratio': args.train_ratio,
+        'device': torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        'save_dir': f"../../results/staged_{args.operation}_{args.p}",
+        'checkpoint_epoch': 1000,  # Epoch to save initial checkpoint
+        'max_epochs': args.epochs,
+        'log_interval': args.log_interval,
+        'analyze_interval': args.analyze_interval,
+        'checkpoint_interval': args.checkpoint_interval
+    }
+
+    # Analysis variants
+    analysis_variants = {
+        'sparsity_focus': {
+            'type': 'phase',
+            'save_dir': f"../../results/staged_{args.operation}_{args.p}/sparsity_focus",
+            'circuit_sampling_freq': 20,
+            'snapshot_freq': 25,
+            'sliding_window_size': 20,
+            'jump_threshold': 1.5
+        },
+        'circuit_class_focus': {
+            'type': 'phase',
+            'save_dir': f"../../results/staged_{args.operation}_{args.p}/circuit_focus",
+            'circuit_sampling_freq': 10,  # More frequent circuit sampling
+            'snapshot_freq': 25,
+            'sliding_window_size': 20,
+            'jump_threshold': 1.5
+        }
+    }
+
+    # Run staged experiment
+    results = staged_experiment_framework(
+        base_config=base_config,
+        analysis_variants=analysis_variants
+    )
+
+    # Print summary of results
+    for variant_name, variant_results in results.items():
+        print(f"\n======= Results for {variant_name} =======")
+
+        if 'summary' in variant_results:
+            summary = variant_results['summary']
+
+            print("\nLearning Phase Insights:")
+            for insight in summary.get('insights', []):
+                print(f" - {insight}")
+
+            # Print enhanced insights if available
+            if 'enhanced_insights' in summary:
+                print("\nEnhanced Insights:")
+                for insight in summary['enhanced_insights']:
+                    print(f" - {insight}")
+
+    return results
+
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # architecture parameters
-    parser.add_argument("--embedding", type=int, default=128)
+    parser.add_argument("--embedding", type=int, default=64)
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--num_heads", type=int, default=4)
 
@@ -305,22 +379,26 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--beta1", type=float, default=0.9)  # fixme ?
     parser.add_argument("--beta2", type=float, default=0.98)  # fixme ?
-    parser.add_argument("--weight_decay", type=float, default=0.0)
-    parser.add_argument("--optimizer", default="Adam")
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--optimizer", default="AdamW")
     parser.add_argument("--scheduler", default=None)
     parser.add_argument("--train_ratio", type=float, default=0.5)
 
     # parser.add_argument("--enhanced", action="store_true", help="Run enhanced analysis")
     # parser.add_argument("--phase", action="store_true", help="Run phase transition analysis")
     parser.add_argument('--mode',
-                        choices=['phase', 'enhanced', 'default'],  # The three possible values
+                        choices=['enhanced', 'default'],  # The three possible values
+                        default='enhanced',  # Default value
+                        help='Set the analysis type: enhanced [default] or standard')
+    parser.add_argument('--type',
+                        choices=['phase', 'weight'],  # The three possible values
                         default='phase',  # Default value
-                        help='Set the analysis mode: default, enhanced, or phase [default]')
+                        help='Set the analysis mode: phase [default] or weight')
 
     # analysis intervals
     parser.add_argument("--epochs", type=int, default=10000)
-    parser.add_argument("--analyze_interval", type=int, default=24)
-    parser.add_argument("--log_interval", type=int, default=8)
+    parser.add_argument("--analyze_interval", type=int, default=2)
+    parser.add_argument("--log_interval", type=int, default=4)
     parser.add_argument("--checkpoint_interval", type=int, default=200)
 
     parser.add_argument("--operation", type=str, default='multiply')
@@ -329,5 +407,6 @@ if __name__ == "__main__":
     parser.add_argument("--two_stage", action='store_true')  # fixme ?
     parser.add_argument("--save_weights", action='store_true')  # fixme ?
     args = parser.parse_args()
+
 
     main(args)

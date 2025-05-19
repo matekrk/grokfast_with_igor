@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import torch
 from scipy.signal import find_peaks, savgol_filter
 from scipy.stats import wasserstein_distance
 from scipy.interpolate import interp1d
@@ -610,7 +611,9 @@ class GrokkingDetector(BaseAnalyzer):
 
         # 2. Analyze before, during, and after grokking
         if 'primary_grokking_step' in detection_result and detection_result['primary_grokking_step'] is not None:
+
             grokking_step = detection_result['primary_grokking_step']
+
             # Find the index of this step in the metrics dataframe
             grokking_indices = np.where(detection_result['metrics_df']['step'] == grokking_step)[0]
 
@@ -767,3 +770,26 @@ class GrokkingDetector(BaseAnalyzer):
         plt.close(attr_fig)
 
         return attr_melted
+
+    def cleanup(self):
+        """Release memory held by various analyzers"""
+        # Clear cached activations
+        self.layer_activations = {}
+
+        # Clear large stored tensors
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, dict) and any(isinstance(v, (torch.Tensor, np.ndarray))
+                                              for v in attr.values() if hasattr(attr, 'values')):
+                setattr(self, attr_name, {})
+
+        # Call torch.cuda.empty_cache() if using GPU
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Call cleanup on child analyzers
+        for analyzer_name in ['mlp_sparsity_tracker', 'circuit_class_analyzer', 'interaction_analyzer']:
+            if hasattr(self, analyzer_name):
+                analyzer = getattr(self, analyzer_name)
+                if hasattr(analyzer, 'cleanup'):
+                    analyzer.cleanup()

@@ -161,8 +161,6 @@ class ContinuousCircuitTracker:
         # Store the current epoch
         self.circuit_history['epochs'].append(epoch)
 
-        print(f"Sampling circuit state at epoch {epoch}...")
-
         # Analyze model using core circuit analysis methods
         individual_results, pairwise_results = self._analyze_current_circuits(
             eval_loader, baseline_acc, circuit_threshold)
@@ -238,6 +236,8 @@ class ContinuousCircuitTracker:
                 self.logger.log_data('circuit_tracking', f'epoch_{epoch}_connectivity_change',
                                      self.connectivity_evolution[-1])
 
+        if active_circuits:
+            print(f"\tContinuousCircuitTracker.sample_circuits() @ {epoch}: \t{active_circuits}")
         return {
             'epoch': epoch,
             'active_heads': active_heads,
@@ -665,10 +665,18 @@ class ContinuousCircuitTracker:
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Count')
         ax1.set_title(f'Circuit Evolution Timeline (up to epoch {current_epoch})')
+        ax1.set_yscale('log')
+
+        # info display y-scale in decimal, not log, scale
+        actual_ticks = [1, 2, 3, 5, 8, 10, 12, 14]
+        ax1.set_yticks(actual_ticks)
+        ax1.set_yticklabels([f"{i}" for i in range(1, len(actual_ticks) + 1)])
+
         ax1.legend()
         ax1.grid(True, alpha=0.3)
 
         plt.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.savefig(self.circuits_dir / f'circuit_evolution_timeline_epoch_{current_epoch}.png')
         plt.close(fig1)
 
@@ -755,7 +763,7 @@ class ContinuousCircuitTracker:
                 plt.title(f'Circuit Network at Epoch {current_epoch}')
                 plt.axis('off')
                 plt.tight_layout()
-
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.savefig(self.circuits_dir / f'circuit_network_epoch_{current_epoch}.png')
 
             plt.close(fig2)
@@ -792,6 +800,7 @@ class ContinuousCircuitTracker:
             ax3.set_title(f'Circuit Connection Matrix at Epoch {current_epoch}')
 
             plt.tight_layout()
+            plt.suptitle(f"{self.model.plot_prefix}")
             plt.savefig(self.circuits_dir / f'connection_matrix_epoch_{current_epoch}.png')
 
             plt.close(fig3)
@@ -1337,6 +1346,12 @@ class ContinuousCircuitTracker:
             phase_head_counts = [len(h) for h in self.circuit_history['active_heads'][start_idx:end_idx + 1]]
             phase_circuit_counts = [len(c) for c in self.circuit_history['active_circuits'][start_idx:end_idx + 1]]
 
+            def safe_mean(values, default=0.0):
+                """Calculate mean safely for empty arrays"""
+                if not values or len(values) == 0:
+                    return default
+                return np.mean(values)
+
             # Calculate phase metrics
             phase["characteristics"] = {
                 "duration": len(phase_epochs),
@@ -1348,7 +1363,8 @@ class ContinuousCircuitTracker:
                 "circuit_trend": "increasing" if phase_circuit_counts[-1] > phase_circuit_counts[0] else
                 "decreasing" if phase_circuit_counts[-1] < phase_circuit_counts[0] else
                 "stable",
-                "variability": np.std(phase_circuit_counts) / (np.mean(phase_circuit_counts) + 1e-6)
+                # "variability": np.std(phase_circuit_counts) / (np.mean(phase_circuit_counts) + 1e-6),
+                "variability": np.std(phase_circuit_counts) / (safe_mean(phase_circuit_counts, 1.) + 1e-6),
             }
 
             # Identify key circuits in this phase
@@ -1461,3 +1477,26 @@ class ContinuousCircuitTracker:
             summary["connectivity_change"] = self.connectivity_evolution[epoch_idx]
 
         return summary
+
+    def cleanup(self):
+        """Release memory held by various analyzers"""
+        # Clear cached activations
+        self.layer_activations = {}
+
+        # Clear large stored tensors
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, dict) and any(isinstance(v, (torch.Tensor, np.ndarray))
+                                              for v in attr.values() if hasattr(attr, 'values')):
+                setattr(self, attr_name, {})
+
+        # Call torch.cuda.empty_cache() if using GPU
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Call cleanup on child analyzers
+        for analyzer_name in ['mlp_sparsity_tracker', 'circuit_class_analyzer', 'interaction_analyzer']:
+            if hasattr(self, analyzer_name):
+                analyzer = getattr(self, analyzer_name)
+                if hasattr(analyzer, 'cleanup'):
+                    analyzer.cleanup()

@@ -209,7 +209,7 @@ class CheckpointManager:
         # with open(state_path, "w") as f:
         save_clean_json(state_info, state_path)
 
-        print(f"\tCheckpoint saved at epoch {epoch}")
+        # print(f"\tCheckPointManager.save_checkpoint Checkpoint saved at epoch {epoch}")
 
     def update_stats(self, epoch, train_loss=None, train_accuracy=None,
                      val_loss=None, val_accuracy=None):
@@ -299,7 +299,7 @@ class CheckpointManager:
             raise FileNotFoundError(f"\nCheckpoint file not found: {checkpoint_path}")
 
         # Load the checkpoint
-        print(f"Loading checkpoint from {checkpoint_path}")
+        print(f"\tCheckPointManager.load_checkpoint Loading checkpoint from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path)
 
         # Restore model and optimizer state
@@ -335,14 +335,14 @@ class CheckpointManager:
             }
 
         # Print resumption information
-        print(f"Resumed training from epoch {checkpoint['epoch']}")
+        print(f"\tCheckPointManager.load_checkpoint Resumed training from epoch {checkpoint['epoch']}")
         if "best_val_accuracy" in self.stats:
             print(
-                f"Best validation accuracy so far: {self.stats['best_val_accuracy']:.4f} at epoch {self.stats['best_epoch']}")
+                f"\tCheckPointManager.load_checkpoint Best validation accuracy so far: {self.stats['best_val_accuracy']:.4f} at epoch {self.stats['best_epoch']}")
 
         return state_info
 
-    def save_head_attribution(self, attribution_scores, file_prefix="head_attribution"):
+    def save_head_attribution(self, attribution_scores, file_prefix="head_attribution", epoch=None):
         """
         Save head attribution analysis results
 
@@ -441,6 +441,146 @@ class CheckpointManager:
 
         return ind_file_path, pair_file_path
 
+    def set_save_frequency(self, new_frequency):
+        """
+        Dynamically change the checkpoint save frequency.
+
+        Args:
+            new_frequency: New frequency for saving checkpoints (in epochs)
+
+        Returns:
+            int: Previous save frequency
+        """
+        old_freq = self.save_freq
+        self.save_freq = new_frequency
+        print(f"\tCheckPointManager.save_circuit_analysis Checkpoint save frequency changed from {old_freq} to {new_frequency}")
+        return old_freq
+
+    def force_save_next(self):
+        """
+        Flag to force saving on the next checkpoint opportunity.
+
+        Returns:
+            bool: True
+        """
+        self._force_next_save = True
+        return True
+
+    def save_logger_data(self, epoch, logger, categories=None, force=False):
+        """
+        Save logger data with appropriate frequency management.
+
+        Args:
+            epoch: Current training epoch
+            logger: DataLogger instance
+            categories: Optional list of categories to save (saves all if None)
+            force: Whether to force the save regardless of frequency
+
+        Returns:
+            str or None: Path where data was saved, or None if not saved
+        """
+        # Check if we should save based on frequency
+        should_save = force or getattr(self, '_force_next_save', False)
+
+        if not should_save and epoch % self.save_freq != 0:
+            return None
+
+        # Clear force flag if it was set
+        if getattr(self, '_force_next_save', False):
+            self._force_next_save = False
+
+        # Create logs directory
+        logs_dir = self.stats_dir / "logs"
+        logs_dir.mkdir(exist_ok=True, parents=True)
+
+        # Save logs
+        log_path = logs_dir / f"logs_epoch_{epoch}.json"
+        if hasattr(logger, 'save_logs_to_file'):
+            saved_path = logger.save_logs_to_file(log_path, categories=categories)
+        else:
+            # Fallback for loggers without the method
+            saved_path = self._save_legacy_logger_data(logger, log_path, categories)
+
+        print(f"\tCheckPointManager.save_logger_data(): @ {epoch} \t{saved_path}")
+        return saved_path
+
+    def _save_legacy_logger_data(self, logger, file_path, categories=None):
+        """
+        Fallback method for loggers without save_logs_to_file method.
+
+        Args:
+            logger: DataLogger instance
+            file_path: Path where to save the logs
+            categories: Optional list of categories to save
+
+        Returns:
+            str: Path where logs were saved
+        """
+        path = Path(file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Extract logs
+        if hasattr(logger, 'get_logs'):
+            if categories:
+                data_to_save = {cat: logger.get_logs(cat) for cat in categories}
+            else:
+                data_to_save = logger.get_logs()
+        else:
+            data_to_save = logger.logs if hasattr(logger, 'logs') else {}
+
+        # Sanitize data for JSON
+        def sanitize(value):
+            if isinstance(value, (np.ndarray, torch.Tensor)):
+                return value.tolist()
+            elif isinstance(value, (int, float, str, bool, type(None))):
+                return value
+            else:
+                return str(value)
+
+        sanitized_data = {}
+        for cat, cat_data in data_to_save.items():
+            sanitized_data[cat] = {}
+            for key, values in cat_data.items():
+                sanitized_data[cat][key] = [sanitize(v) for v in values]
+
+        # Save as JSON
+        with open(path, 'w') as f:
+            json.dump({
+                "data": sanitized_data,
+                "save_time": datetime.now().isoformat()
+            }, f, indent=2)
+
+        return str(path)
+
+    def manage_logger_data_retention(self, max_files=10):
+        """
+        Manage the number of logger data files to keep.
+
+        Args:
+            max_files: Maximum number of files to keep
+
+        Returns:
+            int: Number of files removed
+        """
+        logs_dir = self.stats_dir / "logs"
+        if not logs_dir.exists():
+            return 0
+
+        # Get all log files sorted by epoch
+        log_files = sorted(
+            logs_dir.glob("logs_epoch_*.json"),
+            key=lambda p: int(p.stem.split('_')[-1])
+        )
+
+        # Remove excess files
+        removed = 0
+        if len(log_files) > max_files:
+            for file_path in log_files[:-max_files]:
+                file_path.unlink()
+                removed += 1
+
+        return removed
+
 
 class GrokAwareCheckpointManager(CheckpointManager):
     """
@@ -490,7 +630,7 @@ class GrokAwareCheckpointManager(CheckpointManager):
             self.protected_checkpoints.add(new_point)
 
             print(
-                f"\tDetected grokking at epoch {new_point}, protecting checkpoints in range [{window_start}, {window_end}]")
+                f"\tGrokAwareCheckpointManager.update_grokking_points detected grokking at epoch {new_point}, protecting checkpoints in range [{window_start}, {window_end}]")
 
     def _manage_checkpoint_retention(self):
         """
@@ -539,7 +679,7 @@ class GrokAwareCheckpointManager(CheckpointManager):
             self.checkpoint_files.pop(removable[i][0] - i)  # Adjust index as we remove items
 
         print(
-            f"\tKept {len(self.checkpoint_files)} checkpoints, with {len(self.protected_checkpoints)} around grokking")
+            f"\tGrokAwareCheckPointManager._manage_checkpoint_retention Kept {len(self.checkpoint_files)} checkpoints, with {len(self.protected_checkpoints)} around grokking")
 
     def save_checkpoint(self, epoch, train_dataloader_state=None, eval_dataloader_state=None,
                         dataset_split_indices=None, train_loss=None, train_accuracy=None,
@@ -587,11 +727,84 @@ class GrokAwareCheckpointManager(CheckpointManager):
             # Potential grokking if train is high/stable and val is improving
             if train_high and train_stable and val_improving:
                 print(
-                    f"\tPotential grokking detected at epoch {epoch} - val_acc: {val_accuracy:.4f}, trn_acc: {train_accuracy:.4f}, ")
+                    f"\tGrokAwareCheckPointManager._check_for_grokking Potential grokking detected at epoch {epoch} - val_acc: {val_accuracy:.4f}, trn_acc: {train_accuracy:.4f}, ")
                 self.update_grokking_points(epoch)
 
                 # Also force saves for surrounding checkpoints
                 # This could be expanded in a more sophisticated implementation
+
+    def save_logger_data(self, epoch, logger, categories=None, force=False):
+        """
+        Enhanced save_logger_data that considers grokking points.
+
+        Args:
+            epoch: Current training epoch
+            logger: DataLogger instance
+            categories: Optional list of categories to save (saves all if None)
+            force: Whether to force the save regardless of frequency
+
+        Returns:
+            str or None: Path where data was saved, or None if not saved
+        """
+        # Check if this is near a detected grokking point
+        near_grokking = any(abs(epoch - point) <= self.grokking_window
+                            for point in self.grokking_points)
+
+        # Force save if near grokking point
+        if near_grokking:
+            force = True
+
+        # Add additional categories when near grokking
+        if near_grokking and categories is not None:
+            # Ensure we save grokking-relevant categories
+            grokking_categories = ['grokking_phases', 'attention_patterns',
+                                   'circuit_analysis', 'weight_space_jumps']
+            categories = list(set(categories + grokking_categories))
+
+        # Call parent implementation with potentially modified parameters
+        return super().save_logger_data(epoch, logger, categories, force)
+
+    def get_relevant_epochs(self, window_size=5):
+        """
+        Get epochs relevant for logger data analysis.
+
+        Args:
+            window_size: Size of window around key points
+
+        Returns:
+            list: List of relevant epochs
+        """
+        relevant_epochs = set()
+
+        # Include grokking points with window
+        for point in self.grokking_points:
+            for offset in range(-window_size, window_size + 1):
+                relevant_epochs.add(point + offset)
+
+        # Include detected jumps with window
+        if hasattr(self, 'model') and hasattr(self.model, 'logger'):
+            logger = self.model.logger
+            if 'weight_space_jumps' in logger.logs and 'jump_epochs' in logger.logs['weight_space_jumps']:
+                jumps = logger.logs['weight_space_jumps']['jump_epochs']
+                for jump in jumps:
+                    for offset in range(-window_size, window_size + 1):
+                        relevant_epochs.add(jump + offset)
+
+        # Include phase transitions if available
+        if hasattr(self, 'model') and hasattr(self.model, 'logger'):
+            logger = self.model.logger
+            if 'phase_transitions' in logger.logs:
+                for key in logger.logs['phase_transitions']:
+                    if 'transition_' in key and '_epoch' in key:
+                        try:
+                            transition_epoch = logger.logs['phase_transitions'][key][-1]
+                            for offset in range(-window_size, window_size + 1):
+                                relevant_epochs.add(transition_epoch + offset)
+                        except (IndexError, TypeError):
+                            pass
+
+        # Filter out negative epochs
+        return sorted([e for e in relevant_epochs if e >= 0])
 
 
 # Example usage
@@ -630,7 +843,7 @@ def train_with_checkpointing(model, train_loader, test_loader, criterion, optimi
         start_epoch = state_info["epoch"]
         start_step = state_info["step"]
     except FileNotFoundError:
-        print("No checkpoint found, starting training from scratch")
+        print("\ttrain_with_checkpointing No checkpoint found, starting training from scratch")
 
     # Keep track of dataloader state for reproducibility
     # Note: This is a simplified approach and might not work for all dataloaders
@@ -704,9 +917,9 @@ def train_with_checkpointing(model, train_loader, test_loader, criterion, optimi
 
                 # Perform head attribution analysis every 1000 steps
                 if step % 1000 == 0:
-                    print("Performing head attribution analysis...")
+                    print("\ttrain_with_checkpointing Performing head attribution analysis...")
                     attribution_scores = model.analyze_head_attribution(test_loader)
-                    ckpt_manager.save_head_attribution(step, attribution_scores)
+                    ckpt_manager.save_head_attribution(step, attribution_scores, epoch)
 
                     # Save attention patterns for a few examples
                     sample_inputs, _ = next(iter(test_loader))
@@ -722,7 +935,7 @@ def train_with_checkpointing(model, train_loader, test_loader, criterion, optimi
 
                 # Perform circuit analysis every 5000 steps
                 if step % 5000 == 0:
-                    print("Performing circuit analysis...")
+                    print("\ttrain_with_checkpointing Performing circuit analysis...")
                     individual_results, pairwise_results, _ = identify_circuits(
                         model, test_loader, baseline_acc=val_acc)
                     ckpt_manager.save_circuit_analysis(step, individual_results, pairwise_results)
@@ -762,7 +975,7 @@ def train_with_checkpointing(model, train_loader, test_loader, criterion, optimi
         force_save=True
     )
 
-    print("Training completed!")
+    print("\ttrain_with_checkpointing Training completed!")
     return model
 
 

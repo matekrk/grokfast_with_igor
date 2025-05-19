@@ -964,6 +964,29 @@ class JumpAnalysisTools:
 
         return results
 
+    def cleanup(self):
+        """Release memory held by various analyzers"""
+        # Clear cached activations
+        self.layer_activations = {}
+
+        # Clear large stored tensors
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, dict) and any(isinstance(v, (torch.Tensor, np.ndarray))
+                                              for v in attr.values() if hasattr(attr, 'values')):
+                setattr(self, attr_name, {})
+
+        # Call torch.cuda.empty_cache() if using GPU
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Call cleanup on child analyzers
+        for analyzer_name in ['mlp_sparsity_tracker', 'circuit_class_analyzer', 'interaction_analyzer']:
+            if hasattr(self, analyzer_name):
+                analyzer = getattr(self, analyzer_name)
+                if hasattr(analyzer, 'cleanup'):
+                    analyzer.cleanup()
+
 def analyze_model_at_jump(model, checkpoint_path, jump_epoch, eval_loader, criterion, device):
     """
     Load a model checkpoint and analyze it at a specific jump point

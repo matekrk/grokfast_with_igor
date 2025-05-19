@@ -376,6 +376,7 @@ class AttentionMLPAnalyzer:
 
         corr_path = self.save_dir / f'attn_mlp_correlation_epoch_{epoch}.png'
         corr_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         corr_fig.savefig(corr_path)
         plt.close(corr_fig)
         vis_paths['correlation'] = str(corr_path)
@@ -424,6 +425,7 @@ class AttentionMLPAnalyzer:
         pattern_path = self.save_dir / f'head_pattern_stats_epoch_{epoch}.png'
         pattern_fig.tight_layout()
         pattern_fig.savefig(pattern_path)
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.close(pattern_fig)
         vis_paths['pattern_stats'] = str(pattern_path)
 
@@ -466,6 +468,7 @@ class AttentionMLPAnalyzer:
 
         mlp_path = self.save_dir / f'mlp_specialization_epoch_{epoch}.png'
         mlp_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         mlp_fig.savefig(mlp_path)
         plt.close(mlp_fig)
         vis_paths['mlp_specialization'] = str(mlp_path)
@@ -512,6 +515,7 @@ class AttentionMLPAnalyzer:
 
         pattern_vis_path = self.save_dir / f'attention_patterns_epoch_{epoch}.png'
         pattern_vis_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         pattern_vis_fig.savefig(pattern_vis_path)
         plt.close(pattern_vis_fig)
         vis_paths['attention_patterns'] = str(pattern_vis_path)
@@ -662,6 +666,7 @@ class AttentionMLPAnalyzer:
 
         usage_path = self.save_dir / f'{component}_layer{layer_idx}_feature_usage_epoch_{epoch}.png'
         usage_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         usage_fig.savefig(usage_path)
         plt.close(usage_fig)
         vis_paths['feature_usage'] = str(usage_path)
@@ -689,6 +694,7 @@ class AttentionMLPAnalyzer:
 
         top_path = self.save_dir / f'{component}_layer{layer_idx}_top_features_epoch_{epoch}.png'
         top_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         top_fig.savefig(top_path)
         plt.close(top_fig)
         vis_paths['top_features'] = str(top_path)
@@ -713,6 +719,7 @@ class AttentionMLPAnalyzer:
 
         code_path = self.save_dir / f'{component}_layer{layer_idx}_code_correlations_epoch_{epoch}.png'
         code_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         code_fig.savefig(code_path)
         plt.close(code_fig)
         vis_paths['code_correlations'] = str(code_path)
@@ -736,6 +743,7 @@ class AttentionMLPAnalyzer:
 
         tsne_path = self.save_dir / f'{component}_layer{layer_idx}_tsne_epoch_{epoch}.png'
         tsne_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         tsne_fig.savefig(tsne_path)
         plt.close(tsne_fig)
         vis_paths['tsne'] = str(tsne_path)
@@ -840,6 +848,7 @@ class AttentionMLPAnalyzer:
 
         corr_path = save_dir / 'correlation_comparison.png'
         corr_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         corr_fig.savefig(corr_path)
         plt.close(corr_fig)
         vis_paths['correlation_comparison'] = str(corr_path)
@@ -876,6 +885,7 @@ class AttentionMLPAnalyzer:
 
         entropy_path = save_dir / 'entropy_comparison.png'
         entropy_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         entropy_fig.savefig(entropy_path)
         plt.close(entropy_fig)
         vis_paths['entropy_comparison'] = str(entropy_path)
@@ -910,6 +920,7 @@ class AttentionMLPAnalyzer:
 
         mlp_path = save_dir / 'mlp_concentration_comparison.png'
         mlp_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         mlp_fig.savefig(mlp_path)
         plt.close(mlp_fig)
         vis_paths['mlp_concentration_comparison'] = str(mlp_path)
@@ -975,6 +986,7 @@ class AttentionMLPAnalyzer:
 
         pattern_path = save_dir / 'attention_patterns_comparison.png'
         pattern_fig.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         pattern_fig.savefig(pattern_path)
         plt.close(pattern_fig)
         vis_paths['attention_patterns_comparison'] = str(pattern_path)
@@ -1270,6 +1282,7 @@ class AttentionMLPAnalyzer:
                 ax1.legend()
 
                 plt.tight_layout()
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.savefig(viz_dir / f"jump_{jump_epoch}_correlation_changes.png")
                 plt.close(fig1)
 
@@ -1305,6 +1318,7 @@ class AttentionMLPAnalyzer:
                 ax2.set_xticklabels(ax2.get_xticklabels(), rotation=45, ha='right')
 
                 plt.tight_layout()
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.savefig(viz_dir / f"jump_{jump_epoch}_entropy_changes.png")
                 plt.close(fig2)
 
@@ -1336,6 +1350,7 @@ class AttentionMLPAnalyzer:
                             axes[i].axis('off')
 
                         plt.tight_layout()
+                        plt.suptitle(f"{self.model.plot_prefix}")
                         plt.savefig(viz_dir / f"jump_{jump_epoch}_{state_name}_patterns.png")
                         plt.close(fig3)
 
@@ -1352,6 +1367,7 @@ class AttentionMLPAnalyzer:
                         ax4.set_ylabel('Count')
 
                         plt.tight_layout()
+                        plt.suptitle(f"{self.model.plot_prefix}")
                         plt.savefig(viz_dir / f"jump_{jump_epoch}_{state_name}_{layer_key}_feature_dist.png")
                         plt.close(fig4)
 
@@ -1368,6 +1384,7 @@ class AttentionMLPAnalyzer:
                             axes[i].set_xticks([])
 
                         plt.tight_layout()
+                        plt.suptitle(f"{self.model.plot_prefix}")
                         plt.savefig(viz_dir / f"jump_{jump_epoch}_{state_name}_{layer_key}_top_features.png")
                         plt.close(fig5)
 
@@ -1596,6 +1613,7 @@ class AttentionMLPAnalyzer:
             plt.title(f'Component Attribution at Jump {jump_epoch}')
             plt.xticks(rotation=45, ha='right')
             plt.tight_layout()
+            plt.suptitle(f"{self.model.plot_prefix}")
             plt.savefig(viz_dir / f"jump_{jump_epoch}_component_attribution.png")
             plt.close()
 
@@ -1638,6 +1656,7 @@ class AttentionMLPAnalyzer:
             plt.title(f'Circuit Interaction Network at Jump {jump_epoch}')
             plt.axis('off')
             plt.tight_layout()
+            plt.suptitle(f"{self.model.plot_prefix}")
             plt.savefig(viz_dir / f"jump_{jump_epoch}_circuit_network.png")
             plt.close()
 
@@ -1679,10 +1698,32 @@ class AttentionMLPAnalyzer:
 
                 plt.title(f'Pairwise Component Interactions at Jump {jump_epoch}')
                 plt.tight_layout()
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.savefig(viz_dir / f"jump_{jump_epoch}_interaction_heatmap.png")
                 plt.close()
 
+    def cleanup(self):
+        """Release memory held by various analyzers"""
+        # Clear cached activations
+        self.layer_activations = {}
 
+        # Clear large stored tensors
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, dict) and any(isinstance(v, (torch.Tensor, np.ndarray))
+                                              for v in attr.values() if hasattr(attr, 'values')):
+                setattr(self, attr_name, {})
+
+        # Call torch.cuda.empty_cache() if using GPU
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Call cleanup on child analyzers
+        for analyzer_name in ['mlp_sparsity_tracker', 'circuit_class_analyzer', 'interaction_analyzer']:
+            if hasattr(self, analyzer_name):
+                analyzer = getattr(self, analyzer_name)
+                if hasattr(analyzer, 'cleanup'):
+                    analyzer.cleanup()
 
 # info define the SparseAutoencoder class that was referenced
 class SparseAutoencoder(torch.nn.Module):
@@ -1774,6 +1815,29 @@ class SparseAutoencoder(torch.nn.Module):
             torch.Tensor: Reconstructed inputs
         """
         return self.decoder(code)
+
+    def cleanup(self):
+        """Release memory held by various analyzers"""
+        # Clear cached activations
+        self.layer_activations = {}
+
+        # Clear large stored tensors
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, dict) and any(isinstance(v, (torch.Tensor, np.ndarray))
+                                              for v in attr.values() if hasattr(attr, 'values')):
+                setattr(self, attr_name, {})
+
+        # Call torch.cuda.empty_cache() if using GPU
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Call cleanup on child analyzers
+        for analyzer_name in ['mlp_sparsity_tracker', 'circuit_class_analyzer', 'interaction_analyzer']:
+            if hasattr(self, analyzer_name):
+                analyzer = getattr(self, analyzer_name)
+                if hasattr(analyzer, 'cleanup'):
+                    analyzer.cleanup()
 
 # info example usage of the complete framework
 def analyze_model_across_grokking(model_path, pre_grokking_ckpt, during_grokking_ckpt,

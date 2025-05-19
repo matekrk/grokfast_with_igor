@@ -9,7 +9,7 @@ from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpace
 from analysis.analyzers.grokking_detection import analyze_grokking_transitions
 from analysis.analyzers.jump_analysis_manager import JumpAnalysisManager
 from analysis.analyzers.jump_analysis_tools import JumpAnalysisTools
-from analysis.utils.utils import init_train_dataloader_state, FittingScore
+from analysis.utils.utils import init_train_dataloader_state, FittingScore, debug_grokking_step
 
 
 def get_force_snapshot(method, epoch, analyze_interval, min_epoch_for_detection, weight_tracker=None):
@@ -421,22 +421,42 @@ def train_with_enhanced_analysis(model, train_loader, eval_loader,
 # info perform some grokking analysis and save (?)
 def perform_grokking_analysis(model, weight_tracker, train_loader, eval_loader):
     # todo move all to some class
+
     grokking_analysis = analyze_grokking_transitions(model=model, weight_tracker=weight_tracker,
                                                      train_loader=train_loader, eval_loader=eval_loader)
     if grokking_analysis:
         if 'primary_grokking_step' in grokking_analysis and grokking_analysis['primary_grokking_step']:
-            print(f"  Grokking detected at epoch {grokking_analysis['primary_grokking_step']}")
-            # info check if this coincides with any detected jumps
-            # todo do some better statistics
+            debug_grokking_step(
+                grokking_analysis['primary_grokking_step'],
+                "perform_grokking_analysis",
+                model.logger if hasattr(model, "logger") else None
+            )
+            # Handle both scalar and list cases for primary_grokking_step
+            primary_step = grokking_analysis['primary_grokking_step']
+
+            if isinstance(primary_step, list):
+                print(f"  Multiple grokking points detected: {primary_step}")
+                grokking_steps = primary_step
+            else:
+                print(f"  Grokking detected at epoch {primary_step}")
+                grokking_steps = [primary_step]
+
+            # Check if any grokking steps coincide with detected jumps
             jumps = [j['epoch'] for j in weight_tracker.detected_jumps]
-            closest_jump = min(jumps,
-                               key=lambda x: abs(x - grokking_analysis['primary_grokking_step'])) if jumps else None
 
-            if closest_jump:
-                # info avoid repetitions todo (a dictionary?)
-                distance = abs(closest_jump - grokking_analysis['primary_grokking_step'])
-                print(f"  Closest jump to grokking point is at epoch {closest_jump} (distance: {distance} epochs)")
+            if jumps:
+                for step in grokking_steps:
+                    try:
+                        closest_jump = min(jumps, key=lambda x: abs(x - step))
+                        distance = abs(closest_jump - step)
+                        print(
+                            f"  Closest jump to grokking point at epoch {step} is at epoch {closest_jump} (distance: {distance} epochs)")
+                    except (TypeError, ValueError) as e:
+                        print(f"  Error finding closest jump for grokking step {step}: {e}")
+                        print(f"  grokking_step type: {type(step)}, value: {step}")
+                        print(f"  jumps: {jumps[:5]}{'...' if len(jumps) > 5 else ''}")
 
+    return grokking_analysis
 
 def get_loss_landscape_slice(model, inputs, targets, criterion, direction1, direction2,
                              step_size=0.1, n_steps=10):

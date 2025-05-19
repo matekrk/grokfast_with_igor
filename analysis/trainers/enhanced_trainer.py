@@ -164,7 +164,7 @@ class EnhancedTrainer(BaseTrainer):
         jump_epoch = result['jump_epoch']
         jump_char = result['characterization']
 
-        print(f"Jump analysis for epoch {jump_epoch}:")
+        print(f"\tEnhancedTrainer._process_jump_result()\tJump analysis for epoch {jump_epoch}:")
         print(f"  Total magnitude: {jump_char['total_magnitude']['pre_to_jump']:.4f}")
         print(f"  Symmetry ratio: {jump_char['total_magnitude']['symmetry_ratio']:.4f}")
         print(f"  Top changing layers: {', '.join(jump_char['top_layers'])}")
@@ -172,7 +172,7 @@ class EnhancedTrainer(BaseTrainer):
 
         # Create visualizations
         viz_dir = self.weight_tracker.visualize_jump_characterization(jump_char)
-        print(f"  Visualizations saved to {viz_dir}")
+        print(f"\tEnhancedTrainer._process_jump_result()\tVisualizations saved to {viz_dir}")
 
         # Check correlation with grokking
         if 'grokking_phases' in self.model.logger.logs and 'grokking_step' in self.model.logger.logs['grokking_phases']:
@@ -185,15 +185,15 @@ class EnhancedTrainer(BaseTrainer):
                     distance = min(dist_l)
                 else:
                     distance = abs(jump_epoch - grokking_step)
-                print(f"  Distance to grokking point: {distance} epochs")
+                print(f"\tEnhancedTrainer._process_jump_result()\tDistance to grokking point: {distance} epochs")
 
                 # Highlight if jump is close to grokking
                 if distance < 50:
-                    print(f"  *** THIS JUMP MAY BE RELATED TO GROKKING! ***")
+                    print(f"\tEnhancedTrainer._process_jump_results()\t*** THIS JUMP MAY BE RELATED TO GROKKING! ***")
 
     def _perform_detailed_analysis(self, epoch):
         """Perform periodic detailed analysis"""
-        print(f"Performing periodic detailed analysis at epoch {epoch}...")
+        print(f"\tEnhancedTrainer._process_jump_result()\tPerforming periodic detailed analysis at epoch {epoch}...")
 
         # Analyze loss landscape
         sample_inputs, sample_targets = next(iter(self.eval_loader))
@@ -221,18 +221,38 @@ class EnhancedTrainer(BaseTrainer):
 
     def _log_grokking_jump_correlation(self, grokking_step):
         """Log correlation between grokking and jumps"""
-        print(f"  Grokking detected at epoch {grokking_step}")
+        # Add debug logging here
+        from analysis.utils.utils import debug_grokking_step
+        debug_grokking_step(grokking_step, "EnhancedTrainer._analyze_circuit_specialization", self.logger)
 
-        # Find closest jump
+        # Handle both scalar and list cases for grokking_step
+        if isinstance(grokking_step, list):
+            print(f"\tEnhancedTrainer._log_grokking_jump_correlation()\tMultiple grokking points detected: {grokking_step}")
+            grokking_steps = grokking_step
+        else:
+            print(f"\tEnhancedTrainer._log_grokking_jump_correlation()\tGrokking detected at epoch {grokking_step}")
+            grokking_steps = [grokking_step]
+
+        # Find closest jump for each grokking step
         jumps = [j['epoch'] for j in self.weight_tracker.detected_jumps]
         if jumps:
-            closest_jump = min(jumps, key=lambda x: abs(x - grokking_step))
-            distance = abs(closest_jump - grokking_step)
-            print(f"  Closest jump to grokking point is at epoch {closest_jump} (distance: {distance} epochs)")
+            for step in grokking_steps:
+                try:
+                    closest_jump = min(jumps, key=lambda x: abs(x - step))
+                    distance = abs(closest_jump - step)
+                    print(
+                        f"\tEnhancedTrainer._log_grokking_jump_correlation()\tClosest jump to grokking point at epoch {step} is at epoch {closest_jump} (distance: {distance} epochs)")
+                except (TypeError, ValueError) as e:
+                    print(
+                        f"\tEnhancedTrainer._log_grokking_jump_correlation()\tError finding closest jump for grokking step {step}: {e}")
+                    print(
+                        f"\tEnhancedTrainer._log_grokking_jump_correlation()\tgrokking_step type: {type(step)}, value: {step}")
+                    print(
+                        f"\tEnhancedTrainer._log_grokking_jump_correlation()\tjumps: {jumps[:5]}{'...' if len(jumps) > 5 else ''}")
 
     def _perform_final_analysis(self):
         """Perform final analysis at the end of training"""
-        print("Training complete. Generating final analysis...")
+        print("\tEnhancedTrainer.\tTraining complete. Generating final analysis...")
 
         # Visualize the overall jump timeline
         self.weight_tracker.visualize_jumps_timeline()

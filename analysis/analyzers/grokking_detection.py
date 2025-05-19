@@ -640,6 +640,10 @@ def analyze_grokking_transitions(model, train_loader, eval_loader, save_path_pre
     # 3. Analyze before, during, and after grokking
     if 'primary_grokking_step' in detection_result and detection_result['primary_grokking_step'] is not None:
         grokking_step = detection_result['primary_grokking_step']
+        # Add debug info before returning
+        from analysis.utils.utils import debug_grokking_step
+        debug_grokking_step(grokking_step, "analyze_grokking_transitions", model.logger)
+
         # Find the index of this step in the metrics dataframe
         grokking_indices = np.where(detection_result['metrics_df']['step'] == grokking_step)[0]
 

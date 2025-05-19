@@ -1,3 +1,6 @@
+import numpy as np
+import torch
+
 from analysis.analyzers.base_analyzer import BaseAnalyzer
 # from analysis.visualization.model_visualizer import visualize_model_analysis
 # from pathlib import Path
@@ -171,7 +174,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
                         self.detected_transitions.append(transition)
 
                 # Log transition detection
-                print(f"Phase transition analysis at epoch {epoch} detected {len(new_transitions)} transitions")
+                print(f"\tPhaseTransitionAnalyzer.analyze():\tPhase transition analysis at epoch {epoch} detected {len(new_transitions)} transitions")
 
                 # Log transitions to logger if available
                 if self.logger and new_transitions:
@@ -222,7 +225,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
             dict: Detailed analysis of the transition
         """
         transition_epoch = transition['epoch']
-        print(f"Performing detailed analysis of transition at epoch {transition_epoch}")
+        print(f"\tPhaseTransitionAnalyzer._analyze_transition_details():\tPerforming detailed analysis of transition at epoch {transition_epoch}")
 
         details = {
             'epoch': transition_epoch,
@@ -326,6 +329,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
         ax1.legend()
 
         plt.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.savefig(self.phase_dir / f"transition_timeline_epoch_{transition_epoch}.png")
         plt.close(fig1)
 
@@ -356,6 +360,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
                 ax2.tick_params(axis='x', rotation=45)
 
                 plt.tight_layout()
+                plt.suptitle(f"{self.model.plot_prefix}")
                 plt.savefig(self.phase_dir / f"transition_attribution_epoch_{transition_epoch}.png")
                 plt.close(fig2)
 
@@ -417,10 +422,11 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
                     plt.axis('off')
 
                     plt.tight_layout()
+                    plt.suptitle(f"{self.model.plot_prefix}")
                     plt.savefig(self.phase_dir / f"transition_circuit_network_epoch_{transition_epoch}.png")
                     plt.close(fig3)
                 except ImportError:
-                    print("NetworkX not available for circuit visualization")
+                    print("\tPhaseTransitionAnalyzer._visualize_transition():\tNetworkX not available for circuit visualization")
 
         # 4. Create attention pattern visualization if available
         if 'attention_analysis' in details and 'patterns' in details['attention_analysis']:
@@ -456,7 +462,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
                 for i in range(len(selected_patterns), len(axes)):
                     axes[i].axis('off')
 
-                plt.suptitle(f'Attention Patterns at Transition Epoch {transition_epoch}')
+                plt.suptitle(f'{self.model.plot_prefix} Attention Patterns at Transition Epoch {transition_epoch}')
                 plt.tight_layout()
                 plt.savefig(self.phase_dir / f"transition_attention_patterns_epoch_{transition_epoch}.png")
                 plt.close(fig4)
@@ -640,6 +646,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
         ax1.set_title('Comparison of Weight Space Jumps and Phase Transitions')
 
         plt.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.savefig(self.phase_dir / "jump_transition_comparison.png")
         plt.close(fig1)
 
@@ -690,6 +697,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
             ax2.legend(handles=legend_elements)
 
             plt.tight_layout()
+            plt.suptitle(f"{self.model.plot_prefix}")
             plt.savefig(self.phase_dir / "jump_transition_correlation.png")
             plt.close(fig2)
 
@@ -732,6 +740,7 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
 
             plt.title('Characteristics of Aligned Jump-Transition Events')
             plt.tight_layout()
+            plt.suptitle(f"{self.model.plot_prefix}")
             plt.savefig(self.phase_dir / "aligned_event_characteristics.png")
             plt.close(fig3)
 
@@ -937,5 +946,54 @@ class PhaseTransitionAnalyzer(BaseAnalyzer):
             ax2.set_xlim(min_x, max_x)
 
         plt.tight_layout()
+        plt.suptitle(f"{self.model.plot_prefix}")
         plt.savefig(self.phase_dir / "learning_phases_summary.png")
         plt.close(fig)
+
+    def get_analysis_results(self, epoch):
+        """Lazily load analysis results for a specific epoch"""
+        if not hasattr(self, '_cached_results'):
+            self._cached_results = {}
+
+        if epoch not in self._cached_results:
+            # Check if we have the results in memory first
+            if hasattr(self, 'enhanced_analysis_history') and epoch in self.enhanced_analysis_history:
+                return self.enhanced_analysis_history[epoch]
+
+            # If not in memory, try to load from disk
+            result_file = self.save_dir / f"analysis_results_epoch_{epoch}.pt"
+            if result_file.exists():
+                try:
+                    self._cached_results[epoch] = torch.load(result_file)
+                    # Limit cache size to avoid memory bloat
+                    if len(self._cached_results) > 10:
+                        oldest_key = min(self._cached_results.keys())
+                        del self._cached_results[oldest_key]
+                    return self._cached_results[epoch]
+                except Exception as e:
+                    print(f"\tPhaseTransitionAnalyzer.get_analysis_results():\tError loading analysis for epoch {epoch}: {e}")
+
+        return self._cached_results.get(epoch, None)
+
+    def cleanup(self):
+        """Release memory held by various analyzers"""
+        # Clear cached activations
+        self.layer_activations = {}
+
+        # Clear large stored tensors
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, dict) and any(isinstance(v, (torch.Tensor, np.ndarray))
+                                              for v in attr.values() if hasattr(attr, 'values')):
+                setattr(self, attr_name, {})
+
+        # Call torch.cuda.empty_cache() if using GPU
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Call cleanup on child analyzers
+        for analyzer_name in ['mlp_sparsity_tracker', 'circuit_class_analyzer', 'interaction_analyzer']:
+            if hasattr(self, analyzer_name):
+                analyzer = getattr(self, analyzer_name)
+                if hasattr(analyzer, 'cleanup'):
+                    analyzer.cleanup()
