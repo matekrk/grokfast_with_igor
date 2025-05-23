@@ -722,7 +722,10 @@ class GrokAwareCheckpointManager(CheckpointManager):
             train_stable = max(recent_train) - min(recent_train) < 0.1
 
             # Check if val accuracy is improving rapidly
-            val_improving = val_accuracy > 1.2 * sum(recent_val[:-1]) / len(recent_val[:-1])
+            if len(recent_val[:-1]) > 0:
+                val_improving = val_accuracy > 1.2 * sum(recent_val[:-1]) / len(recent_val[:-1])
+            else:
+                val_improving = False
 
             # Potential grokking if train is high/stable and val is improving
             if train_high and train_stable and val_improving:

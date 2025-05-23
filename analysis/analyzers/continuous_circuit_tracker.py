@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from analysis.utils.utils import shorten_layer_head, get_current_callable_info
+
 
 class ContinuousCircuitTracker:
     """
@@ -237,7 +239,7 @@ class ContinuousCircuitTracker:
                                      self.connectivity_evolution[-1])
 
         if active_circuits:
-            print(f"\tContinuousCircuitTracker.sample_circuits() @ {epoch}: \t{active_circuits}")
+            print(f"\t{get_current_callable_info()} @ {epoch}: \t{shorten_layer_head(active_circuits)}")
         return {
             'epoch': epoch,
             'active_heads': active_heads,

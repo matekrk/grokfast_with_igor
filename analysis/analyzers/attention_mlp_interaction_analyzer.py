@@ -147,7 +147,13 @@ class AttentionMLPInteractionAnalyzer:
                                     })
 
         # Compute average correlations
-        avg_correlations = {layer: np.mean(correlations)
+        def safe_mean(values, default=0.0):
+            """Calculate mean safely for empty arrays"""
+            if not values or len(values) == 0:
+                return default
+            return np.mean(values)
+
+        avg_correlations = {layer: safe_mean(correlations)
                             for layer, correlations in batch_correlations.items()}
 
         # Analyze head-MLP flow statistics

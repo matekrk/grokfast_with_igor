@@ -41,7 +41,7 @@ def main(args=None):
         scheduler_name=args.scheduler,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
-        base_dir="../../results",
+        base_dir=Path.home() / "results",
         init_xavier=False,
     )
 
@@ -100,7 +100,7 @@ def main(args=None):
         max_to_keep=5,  # maximum number of checkpoint files (groups) to keep
     )
 
-    if args.mode == 'enhanced' and args.type == 'weight':
+    if args.mode == 'enhanced' and args.analysis_type == 'weight':
         model, weight_tracker, jump_analyzer = main_with_enhanced_weight_tracking(args, model=model,
                                                                                   train_loader=train_loader,
                                                                                   eval_loader=eval_loader,
@@ -109,7 +109,7 @@ def main(args=None):
                                                                                   scheduler=scheduler, device=device,
                                                                                   checkpointManager=checkpointManager,
                                                                                   dataset_split_indices=dataset_split_indices)
-    elif args.mode == 'default' and args.mode == 'phase':
+    elif args.mode == 'default' and args.analysis_type == 'phase':
         model, weight_tracker, phase_analyzer, phase_weight_analysis = main_with_phase_tracking(
             args,
             model=model,
@@ -122,7 +122,7 @@ def main(args=None):
             checkpointManager=checkpointManager,
             dataset_split_indices=dataset_split_indices,
         )
-    elif args.mode == 'enhanced' and args.type == 'phase':
+    elif args.mode == 'enhanced' and args.analysis_type == 'phase':
         model, weight_tracker, phase_analyzer, phase_weight_analysis = main_with_enhanced_phase_tracking(
             args,
             model=model,
@@ -136,6 +136,19 @@ def main(args=None):
             dataset_split_indices=dataset_split_indices,
             # jump_analyzer=jump_analyzer,
             # phase_weight_analysis=phase_weight_analysis,
+        )
+    elif args.mode == 'enhanced' and args.analysis_type == 'token':
+        model, analysis_results = main_with_token_circuit_analysis(
+            args,
+            model=model,
+            train_loader=train_loader,
+            eval_loader=eval_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            checkpointManager=checkpointManager,
+            dataset_split_indices=dataset_split_indices,
         )
     else:
         model = main_with_analysis(
@@ -291,6 +304,40 @@ def main_with_enhanced_weight_tracking(args, model, train_loader, eval_loader,
     return model, weight_tracker, jump_analyzer
 
 
+# In grok_transformer_analysis.py
+def main_with_token_circuit_analysis(
+        args,
+        model,
+        train_loader,
+        eval_loader,
+        criterion,
+        optimizer,
+        scheduler,
+        device,
+        checkpointManager,
+        dataset_split_indices,
+    ):
+    from analysis.trainers.train_with_circuit_analysis import train_with_circuit_analysis
+
+
+    model, analysis_results = train_with_circuit_analysis(
+        model=model,
+        train_loader=train_loader,
+        eval_loader=eval_loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+        checkpointManager=checkpointManager,
+        epochs=args.epochs,
+        log_interval=args.log_interval,
+        analyze_interval=args.analyze_interval,
+        checkpoint_interval=args.checkpoint_interval,
+        dataset_split_indices = dataset_split_indices,
+    )
+    return model, analysis_results
+
+
 def main_with_staged_analysis(args):
     """Run experiment with staged analysis"""
     # Base configuration
@@ -390,10 +437,10 @@ if __name__ == "__main__":
                         choices=['enhanced', 'default'],  # The three possible values
                         default='enhanced',  # Default value
                         help='Set the analysis type: enhanced [default] or standard')
-    parser.add_argument('--type',
-                        choices=['phase', 'weight'],  # The three possible values
+    parser.add_argument('--analysis-type',
+                        choices=['phase', 'weight', 'token', 'all'],  # The three possible values
                         default='phase',  # Default value
-                        help='Set the analysis mode: phase [default] or weight')
+                        help='Set the analysis mode: phase [default], weight, token or all')
 
     # analysis intervals
     parser.add_argument("--epochs", type=int, default=10000)

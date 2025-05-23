@@ -172,6 +172,60 @@ def find_closest_jump(jump_epochs, target_epoch):
     return jump_epochs[np.argmin(np.abs(np.array(jump_epochs) - target_epoch))]
 
 
+import re
+
+
+def shorten_layer_head(items, word1="layer", word2="head", abbrev1="L", abbrev2="H"):
+    """
+    Shortens strings with pattern "word1_n_word2_k+word1_m_word2_p" to "abbrev1nabbrev2k+abbrev1mabbrev2p"
+
+    Args:
+        items: Single string or list of strings
+        word1: First word to be replaced (default: "layer")
+        word2: Second word to be replaced (default: "head")
+        abbrev1: Abbreviation for word1 (default: "L")
+        abbrev2: Abbreviation for word2 (default: "H")
+
+    Returns:
+        Shortened string(s) with the same format
+    """
+    # Fix: Use double backslashes in f-string or fr-string (in Python 3.12+)
+    pattern = f'{word1}_(\\d+)_{word2}_(\\d+)'
+    replacement = f'{abbrev1}\\1{abbrev2}\\2'
+
+    if isinstance(items, list):
+        return [re.sub(pattern, replacement, item) if item else "" for item in items]
+    else:
+        return re.sub(pattern, replacement, items) if items else ""
+
+
+def shorten_general(items, word_abbrev_map=None):
+    """
+    Shortens strings with multiple components of form "word_n" to "abbrevn"
+
+    Args:
+        items: Single string or list of strings
+        word_abbrev_map: Dictionary mapping words to their abbreviations (default: first letter)
+
+    Returns:
+        Shortened string(s)
+    """
+    if word_abbrev_map is None:
+        word_abbrev_map = {}
+
+    def replace_word(match):
+        word, num = match.groups()
+        return f"{word_abbrev_map.get(word, word[0].upper())}{num}"
+
+    # Fix: Use raw string for pattern
+    pattern = r'([a-zA-Z]+)_(\d+)'
+
+    if isinstance(items, list):
+        return [re.sub(pattern, replace_word, item) if item else "" for item in items]
+    else:
+        return re.sub(pattern, replace_word, items) if items else ""
+
+
 def get_class_name(obj, shorten=False):
     """
     Get the class name of an object, class, or method.
@@ -218,6 +272,150 @@ def get_class_name(obj, shorten=False):
         class_name = class_name.rstrip('_')
 
     return class_name
+
+
+def get_callable_info(obj, shorten=False):
+    """
+    Get debug info about a callable object (method, function, or class).
+
+    Args:
+        obj: A method, function, class, or instance
+        shorten: If True, shortens names by removing common prefixes/underscores
+
+    Returns:
+        str: Description suitable for debug logs
+    """
+    # Initialize variables
+    class_name = None
+    method_name = None
+    function_name = None
+
+    # Handle different types of objects
+    if hasattr(obj, '__self__') and obj.__self__ is not None:
+        # Bound method (accessed through an instance)
+        class_name = obj.__self__.__class__.__name__
+        method_name = obj.__name__
+    elif hasattr(obj, '__qualname__'):
+        # Function or unbound method
+        qualname = obj.__qualname__
+        if '.' in qualname:
+            # Unbound method (Format: ClassName.method_name)
+            parts = qualname.split('.')
+            class_name = parts[0]
+            method_name = parts[-1]
+        else:
+            # Standalone function
+            function_name = obj.__name__
+    elif isinstance(obj, type):
+        # If obj is a class
+        class_name = obj.__name__
+    else:
+        # If obj is an instance
+        class_name = obj.__class__.__name__
+
+    # Shorten names if requested
+    if shorten:
+        # Helper function to shorten a name
+        def _shorten(name):
+            if not name:
+                return name
+
+            # Remove common prefixes in PyTorch
+            if name.startswith('torch_'):
+                name = name[6:]
+            elif name.startswith('nn_'):
+                name = name[3:]
+
+            # Replace double underscores with single
+            name = name.replace('__', '_')
+
+            # Remove trailing underscores
+            name = name.rstrip('_')
+            return name
+
+        class_name = _shorten(class_name)
+        method_name = _shorten(method_name)
+        function_name = _shorten(function_name)
+
+    # Format the output for debug logs
+    if method_name and class_name:
+        return f"{class_name}.{method_name}()"
+    elif function_name:
+        return f"{function_name}()"
+    elif class_name:
+        return f"{class_name}"
+    else:
+        return "Unknown"
+
+
+import inspect
+
+
+def get_current_callable_info(shorten=False):
+    """
+    Get debug info about the currently executing function or method.
+
+    Args:
+        shorten: If True, shortens names by removing common prefixes/underscores
+
+    Returns:
+        str: Description of the current function/method suitable for debug logs
+    """
+    # Get the current frame and then the frame that called this function
+    frame = inspect.currentframe().f_back
+
+    # Get function name
+    function_name = frame.f_code.co_name
+
+    # Check if this is a method or a function
+    # For methods, the first argument should be 'self' or 'cls'
+    args_info = inspect.getargvalues(frame)
+    args = args_info.args
+
+    # Initialize variables
+    class_name = None
+    method_name = function_name
+
+    if args and args[0] in ('self', 'cls'):
+        # This is likely a method
+        # Get the class from the first argument ('self' or 'cls')
+        instance_or_class = args_info.locals[args[0]]
+
+        if args[0] == 'self':
+            # Instance method
+            class_name = instance_or_class.__class__.__name__
+        elif args[0] == 'cls':
+            # Class method
+            class_name = instance_or_class.__name__
+
+    # Shorten names if requested
+    if shorten:
+        # Helper function to shorten a name
+        def _shorten(name):
+            if not name:
+                return name
+
+            # Remove common prefixes in PyTorch
+            if name.startswith('torch_'):
+                name = name[6:]
+            elif name.startswith('nn_'):
+                name = name[3:]
+
+            # Replace double underscores with single
+            name = name.replace('__', '_')
+
+            # Remove trailing underscores
+            name = name.rstrip('_')
+            return name
+
+        class_name = _shorten(class_name)
+        method_name = _shorten(method_name)
+
+    # Format the output for debug logs
+    if class_name:
+        return f"{class_name}.{method_name}()"
+    else:
+        return f"{method_name}()"
 
 
 class FittingScore:
