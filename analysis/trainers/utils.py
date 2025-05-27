@@ -2,42 +2,34 @@ import torch
 
 
 def train_epoch(model, train_loader, criterion, optimizer, epoch, device):
-    """Run a single training epoch"""
+    """Train for one epoch with standard batch format"""
     model.train()
-    total_loss = 0.0
-    correct = 0
-    total = 0
+    train_correct = train_total = 0
+    train_loss = 0.0
 
     for batch_idx, (inputs, targets) in enumerate(train_loader):
-        # Move to device
+        # Inputs should be [batch_size, seq_len], targets should be [batch_size]
         inputs, targets = inputs.to(device), targets.to(device)
 
-        # Zero gradients
         optimizer.zero_grad()
 
-        # Forward pass
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-
-        # Backward pass and optimize
+        # Forward pass - model expects [batch_size, seq_len] and returns [batch_size, num_tokens]
+        logits = model(inputs)
+        loss = criterion(logits, targets)
         loss.backward()
         optimizer.step()
 
-        # Update statistics
-        total_loss += loss.item() * targets.size(0)
-        predicted = outputs.argmax(dim=-1)
-        total += targets.size(0)
-        correct += (predicted == targets).sum().item()
+        # Calculate accuracy
+        _, predicted = torch.max(logits, 1)
+        train_total += targets.size(0)
+        train_correct += (predicted == targets).sum().item()
+        train_loss += loss.item() * targets.size(0)
 
-    # Calculate epoch metrics
-    avg_loss = total_loss / total if total > 0 else 0
-    accuracy = correct / total if total > 0 else 0
+    # Return averages
+    train_accuracy = train_correct / train_total if train_total > 0 else 0.0
+    train_loss = train_loss / train_total if train_total > 0 else 0.0
 
-    return {
-        'loss': avg_loss,
-        'accuracy': accuracy
-    }
-
+    return {'accuracy': train_accuracy, 'loss': train_loss}
 
 def evaluate(model, eval_loader, criterion, device):
     """Evaluate the model on the provided data"""

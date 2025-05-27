@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from analysis.core.circuit_registry import CircuitRegistry
+from analysis.core.circuit_schema import Element, ElementType, Connection, ConnectionType, Circuit, CircuitType
 from analysis.utils.utils import shorten_layer_head, get_current_callable_info
 
 
@@ -15,7 +17,7 @@ class ContinuousCircuitTracker:
     perspective on circuit development.
     """
 
-    def __init__(self, model, save_dir, logger=None, sampling_freq=20,
+    def __init__(self, model, save_dir, logger=None, registry=None, sampling_freq=20,
                  min_attribution=0.01, history_length=10):
         """
         Initialize the continuous circuit tracker.
@@ -31,7 +33,8 @@ class ContinuousCircuitTracker:
         self.model = model
         self.save_dir = Path(save_dir) if isinstance(save_dir, str) else save_dir
         self.save_dir.mkdir(exist_ok=True, parents=True)
-        self.logger = logger if logger else (model.logger if hasattr(model, 'logger') else None)
+        self.logger = logger
+        self.registry = registry
 
         # Analysis settings
         self.sampling_freq = sampling_freq
@@ -206,6 +209,15 @@ class ContinuousCircuitTracker:
         else:
             self.connectivity_evolution.append(0.0)
 
+        # When you find interacting components:
+        interacting_pairs = self._find_significant_interactions(eval_loader=eval_loader)
+        self.interacting_pairs = interacting_pairs
+
+        for pair in interacting_pairs:
+            circuit = self._create_component_circuit(pair, epoch, baseline_acc)
+            if circuit:
+                self.registry.register_circuit(circuit, source="component_analysis")
+
         # Optionally measure behavioral impact
         if sample_behavioral:
             self._measure_behavioral_impact(active_circuits, circuit_strengths, eval_loader)
@@ -248,6 +260,425 @@ class ContinuousCircuitTracker:
             'circuit_strengths': circuit_strengths,
             'connectivity_change': self.connectivity_evolution[-1] if self.connectivity_evolution else 0.0
         }
+
+    def _find_significant_interactions(self, eval_loader, batch_limit=5, interaction_threshold=0.3):
+        """
+        Find significant interactions between model components using multiple detection methods
+
+        Returns:
+            List of interaction dictionaries with components and strength
+        """
+
+        # Method 1: Ablation-based interaction detection
+        ablation_interactions = self._detect_ablation_interactions(eval_loader, batch_limit)
+
+        # Method 2: Attention pattern correlation
+        attention_interactions = self._detect_attention_correlations(eval_loader, batch_limit)
+
+        # Method 3: Output activation correlation
+        activation_interactions = self._detect_activation_correlations(eval_loader, batch_limit)
+
+        # Combine and rank all interactions
+        all_interactions = []
+        all_interactions.extend(ablation_interactions)
+        all_interactions.extend(attention_interactions)
+        all_interactions.extend(activation_interactions)
+
+        # Filter by significance threshold and remove duplicates
+        significant_interactions = []
+        seen_pairs = set()
+
+        for interaction in all_interactions:
+            if interaction['strength'] >= interaction_threshold:
+                # Create canonical representation of component pair
+                components = tuple(sorted(interaction['components']))
+
+                if components not in seen_pairs:
+                    seen_pairs.add(components)
+                    interaction['components'] = list(components)  # Convert back to list
+                    significant_interactions.append(interaction)
+
+        # Sort by strength (strongest first)
+        significant_interactions.sort(key=lambda x: x['strength'], reverse=True)
+
+        return significant_interactions
+
+    def _detect_ablation_interactions(self, eval_loader, batch_limit=5):
+        """Detect interactions by measuring how ablating one component affects another"""
+        interactions = []
+
+        # Get baseline performance for all components
+        component_baselines = self._measure_component_contributions(eval_loader, batch_limit)
+
+        # Test pairwise interactions
+        component_names = list(component_baselines.keys())
+
+        for i, comp1 in enumerate(component_names):
+            for comp2 in component_names[i + 1:]:  # Avoid duplicate pairs
+
+                # Measure individual contributions
+                comp1_contrib = component_baselines[comp1]
+                comp2_contrib = component_baselines[comp2]
+
+                # Measure joint contribution (ablate both)
+                joint_contrib = self._measure_joint_contribution([comp1, comp2], eval_loader, 2)
+
+                # Calculate interaction strength
+                # Strong positive interaction: joint effect > sum of individual effects
+                expected_joint = comp1_contrib + comp2_contrib
+                interaction_strength = abs(joint_contrib - expected_joint) / max(expected_joint, 0.1)
+
+                if interaction_strength > 0.1:  # Minimum threshold
+                    interactions.append({
+                        'components': [comp1, comp2],
+                        'strength': interaction_strength,
+                        'type': 'ablation',
+                        'individual_contributions': [comp1_contrib, comp2_contrib],
+                        'joint_contribution': joint_contrib,
+                        'interaction_type': 'synergistic' if joint_contrib > expected_joint else 'redundant'
+                    })
+
+        return interactions
+
+    def _detect_attention_correlations(self, eval_loader, batch_limit=5):
+        """Detect interactions based on attention pattern correlations"""
+        interactions = []
+
+        # Collect attention patterns from multiple batches
+        all_attention_patterns = {}
+
+        batch_count = 0
+        for inputs, targets in eval_loader:
+            if batch_count >= batch_limit:
+                break
+
+            # Forward pass with attention storage
+            _ = self.model(inputs, store_attention=True)
+            patterns = self.model.get_attention_patterns()
+
+            # Store patterns for each head
+            for head_name, pattern in patterns.items():
+                if head_name not in all_attention_patterns:
+                    all_attention_patterns[head_name] = []
+
+                if isinstance(pattern, torch.Tensor):
+                    all_attention_patterns[head_name].append(pattern.detach().cpu().numpy())
+
+            batch_count += 1
+
+        # Calculate correlations between attention heads
+        head_names = list(all_attention_patterns.keys())
+
+        for i, head1 in enumerate(head_names):
+            for head2 in head_names[i + 1:]:
+
+                # Calculate correlation across batches
+                correlations = []
+
+                for batch_idx in range(min(len(all_attention_patterns[head1]),
+                                           len(all_attention_patterns[head2]))):
+
+                    pattern1 = all_attention_patterns[head1][batch_idx].flatten()
+                    pattern2 = all_attention_patterns[head2][batch_idx].flatten()
+
+                    # Ensure same length
+                    min_len = min(len(pattern1), len(pattern2))
+                    pattern1 = pattern1[:min_len]
+                    pattern2 = pattern2[:min_len]
+
+                    if min_len > 1:
+                        corr = np.corrcoef(pattern1, pattern2)[0, 1]
+                        if not np.isnan(corr):
+                            correlations.append(abs(corr))  # Use absolute correlation
+
+                if correlations:
+                    avg_correlation = np.mean(correlations)
+
+                    if avg_correlation > 0.5:  # High correlation threshold
+                        interactions.append({
+                            'components': [head1, head2],
+                            'strength': avg_correlation,
+                            'type': 'attention_correlation',
+                            'correlation_values': correlations
+                        })
+
+        return interactions
+
+    def _detect_activation_correlations(self, eval_loader, batch_limit=3):
+        """Detect interactions based on output activation correlations"""
+        interactions = []
+
+        # Store activations for each component
+        component_activations = {}
+
+        # Hook function to capture activations
+        def create_hook(component_name):
+            def hook(module, input, output):
+                if isinstance(output, torch.Tensor):
+                    if component_name not in component_activations:
+                        component_activations[component_name] = []
+                    component_activations[component_name].append(output.detach().cpu().numpy())
+
+            return hook
+
+        # Register hooks for attention heads and MLPs
+        hooks = []
+
+        for layer_idx, layer in enumerate(self.model.layers):
+            # Hook MLP output
+            mlp_name = f"layer_{layer_idx}_mlp"
+            hooks.append(layer.mlp.register_forward_hook(create_hook(mlp_name)))
+
+            # For attention heads, we'll use the stored attention patterns
+            # (more complex to hook individual heads directly)
+
+        try:
+            # Collect activations
+            batch_count = 0
+            for inputs, targets in eval_loader:
+                if batch_count >= batch_limit:
+                    break
+
+                _ = self.model(inputs, store_attention=True)
+                batch_count += 1
+
+            # Calculate correlations between MLP outputs
+            mlp_names = [name for name in component_activations.keys() if 'mlp' in name]
+
+            for i, mlp1 in enumerate(mlp_names):
+                for mlp2 in mlp_names[i + 1:]:
+
+                    correlations = []
+
+                    for batch_idx in range(min(len(component_activations[mlp1]),
+                                               len(component_activations[mlp2]))):
+
+                        act1 = component_activations[mlp1][batch_idx].flatten()
+                        act2 = component_activations[mlp2][batch_idx].flatten()
+
+                        # Ensure same length
+                        min_len = min(len(act1), len(act2))
+                        act1 = act1[:min_len]
+                        act2 = act2[:min_len]
+
+                        if min_len > 1:
+                            corr = np.corrcoef(act1, act2)[0, 1]
+                            if not np.isnan(corr):
+                                correlations.append(abs(corr))
+
+                    if correlations:
+                        avg_correlation = np.mean(correlations)
+
+                        if avg_correlation > 0.4:  # MLP correlation threshold
+                            interactions.append({
+                                'components': [mlp1, mlp2],
+                                'strength': avg_correlation,
+                                'type': 'activation_correlation',
+                                'correlation_values': correlations
+                            })
+
+        finally:
+            # Remove hooks
+            for hook in hooks:
+                hook.remove()
+
+        return interactions
+
+    def _measure_component_contributions(self, eval_loader, batch_limit=5):
+        """Measure individual component contributions via ablation"""
+        component_contributions = {}
+
+        # Get baseline accuracy
+        baseline_acc = self._get_accuracy(eval_loader, batch_limit)
+
+        # Test each component individually
+        all_components = self._get_all_components()
+
+        for component in all_components:
+            # Ablate this component
+            original_state = self._ablate_component(component)
+
+            # Measure accuracy without this component
+            ablated_acc = self._get_accuracy(eval_loader, batch_limit)
+
+            # Contribution = drop in accuracy when ablated
+            contribution = baseline_acc - ablated_acc
+            component_contributions[component] = max(0, contribution)  # Only positive contributions
+
+            # Restore component
+            self._restore_component(component, original_state)
+
+        return component_contributions
+
+    def _measure_joint_contribution(self, components, eval_loader, batch_limit=2):
+        """Measure joint contribution of multiple components"""
+        # Get baseline
+        baseline_acc = self._get_accuracy(eval_loader, batch_limit)
+
+        # Ablate all components
+        original_states = {}
+        for component in components:
+            original_states[component] = self._ablate_component(component)
+
+        # Measure accuracy
+        joint_ablated_acc = self._get_accuracy(eval_loader, batch_limit)
+        joint_contribution = baseline_acc - joint_ablated_acc
+
+        # Restore all components
+        for component, state in original_states.items():
+            self._restore_component(component, state)
+
+        return max(0, joint_contribution)
+
+    def _get_all_components(self):
+        """Get list of all model components that can be ablated"""
+        components = []
+
+        for layer_idx, layer in enumerate(self.model.layers):
+            # Add attention heads
+            for head_idx in range(self.model.num_heads):
+                components.append(f"layer_{layer_idx}_head_{head_idx}")
+
+            # Add MLP
+            components.append(f"layer_{layer_idx}_mlp")
+
+        return components
+
+    def _ablate_component(self, component_name):
+        """Ablate a specific component and return original state"""
+        original_state = {}
+
+        if 'head_' in component_name:
+            # Parse layer and head indices
+            parts = component_name.split('_')
+            layer_idx = int(parts[1])
+            head_idx = int(parts[3])
+
+            if layer_idx < len(self.model.layers):
+                layer = self.model.layers[layer_idx]
+                head_dim = self.model.dim // self.model.num_heads
+                start_idx = head_idx * head_dim
+                end_idx = (head_idx + 1) * head_dim
+
+                # Store original weights
+                original_state['weights'] = layer.attn.out_proj.weight[:, start_idx:end_idx].clone()
+
+                # Zero out this head
+                with torch.no_grad():
+                    layer.attn.out_proj.weight[:, start_idx:end_idx] = 0
+
+        elif 'mlp' in component_name:
+            # Parse layer index
+            parts = component_name.split('_')
+            layer_idx = int(parts[1])
+
+            if layer_idx < len(self.model.layers):
+                layer = self.model.layers[layer_idx]
+
+                # Store original MLP weights
+                original_state['mlp_weights'] = [param.clone() for param in layer.mlp.parameters()]
+
+                # Zero out MLP
+                with torch.no_grad():
+                    for param in layer.mlp.parameters():
+                        param.zero_()
+
+        return original_state
+
+    def _restore_component(self, component_name, original_state):
+        """Restore component from original state"""
+        if 'head_' in component_name:
+            parts = component_name.split('_')
+            layer_idx = int(parts[1])
+            head_idx = int(parts[3])
+
+            if layer_idx < len(self.model.layers):
+                layer = self.model.layers[layer_idx]
+                head_dim = self.model.dim // self.model.num_heads
+                start_idx = head_idx * head_dim
+                end_idx = (head_idx + 1) * head_dim
+
+                with torch.no_grad():
+                    layer.attn.out_proj.weight[:, start_idx:end_idx] = original_state['weights']
+
+        elif 'mlp' in component_name:
+            parts = component_name.split('_')
+            layer_idx = int(parts[1])
+
+            if layer_idx < len(self.model.layers):
+                layer = self.model.layers[layer_idx]
+
+                with torch.no_grad():
+                    for param, original in zip(layer.mlp.parameters(), original_state['mlp_weights']):
+                        param.copy_(original)
+
+    def _get_accuracy(self, eval_loader, batch_limit=5):
+        """Get model accuracy on limited batches"""
+        self.model.eval()
+        correct = 0
+        total = 0
+
+        batch_count = 0
+        with torch.no_grad():
+            for inputs, targets in eval_loader:
+                if batch_count >= batch_limit:
+                    break
+
+                outputs = self.model(inputs)
+                predicted = outputs.argmax(dim=-1)
+                correct += (predicted == targets).sum().item()
+                total += targets.size(0)
+                batch_count += 1
+
+        return correct / total if total > 0 else 0.0
+
+    def _create_component_circuit(self, interaction_data, epoch, baseline_acc):
+        """Create circuit for component interactions"""
+        components = interaction_data['components']  # e.g., ['layer_0_head_1', 'layer_1_head_2']
+        interaction_strength = interaction_data['strength']
+
+        # Generate circuit ID
+        circuit_id = self.registry.generate_circuit_id(
+            operation_type="component_interaction",
+            component_info=components,
+            epoch=epoch,
+            interaction_strength=interaction_strength,
+            source="ablation_analysis"
+        )
+
+        # Create circuit elements
+        elements = []
+        connections = []
+
+        for comp in components:
+            elements.append(Element(
+                id=comp,
+                type=ElementType.HEAD if 'head_' in comp else ElementType.MLP,
+                properties={"component_name": comp}
+            ))
+
+        # Create interaction connections
+        for i in range(len(components) - 1):
+            connections.append(Connection(
+                source=components[i],
+                target=components[i + 1],
+                strength=interaction_strength,
+                type=ConnectionType.COMPOSITE
+            ))
+
+        return Circuit(
+            id=circuit_id,
+            type=CircuitType.COMPONENT,
+            elements=elements,
+            connections=connections,
+            attribution=interaction_strength,
+            metadata={
+                "operation_type": "component_interaction",
+                "components": components,
+                "interaction_strength": interaction_strength
+            },
+            discovered_at=epoch
+        )
 
     def _analyze_current_circuits(self, eval_loader, baseline_acc=None, threshold=0.01):
         """

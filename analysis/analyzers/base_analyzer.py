@@ -1,4 +1,5 @@
 # analyzers/base_analyzer.py
+from idlelib.window import registry
 from pathlib import Path
 
 import torch
@@ -7,12 +8,12 @@ import torch
 class BaseAnalyzer:
     """Base class for all analysis components"""
 
-    def __init__(self, model, save_dir, logger=None):
+    def __init__(self, model, save_dir, logger=None, registry=None):
         self.model = model
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True, parents=True)
-        self.logger = logger if logger else (model.logger if hasattr(model, 'logger') else None)
-
+        self.logger = logger
+        registry=registry
         # Create analysis directory
         self.analysis_dir = self.save_dir / self._get_analysis_dir_name()
         self.analysis_dir.mkdir(exist_ok=True, parents=True)

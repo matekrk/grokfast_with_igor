@@ -6,6 +6,8 @@ from pathlib import Path
 
 # from analysis.core.circuit_schema import Circuit, Element, Connection, ElementType, ConnectionType, CircuitType
 from analysis.core.circuit_registry import CircuitRegistry
+from analysis.core.circuit_schema import Circuit, CircuitType, Element, ElementType, Connection, ConnectionType, \
+    save_circuits
 from analysis.utils.utils import get_current_callable_info, shorten_layer_head
 from analysis.analyzers.token_operations import TokenOperationDetector
 
@@ -32,13 +34,10 @@ class TokenCircuitDiscovery:
             self.save_dir = None
 
         # Initialize registry
-        if circuit_registry:
-            self.registry = circuit_registry
-        else:
-            self.registry = CircuitRegistry(self.save_dir / "circuit_registry" if self.save_dir else None)
+        self.registry = circuit_registry
 
         # Initialize operation detector
-        self.operation_detector = TokenOperationDetector(model)
+        self.operation_detector = TokenOperationDetector(model, self.registry)
 
         # Storage for token-level analysis
         self.token_attribution_maps = {}  # Maps output tokens to input token influences
@@ -47,46 +46,53 @@ class TokenCircuitDiscovery:
 
     def analyze_token_relationships(self, inputs, targets=None, batch_idx=0,
                                     store_attention=True, epoch=None,
-                                    analyze_multiple_examples=True, max_examples=10):
+                                    analyze_multiple_examples=True, max_examples=10,
+                                    random_sampling=True, random_seed=None):
         """
         Analyze token relationships across multiple examples to find robust circuits
 
         Args:
-            inputs: Input tensor of token IDs [batch_size, seq_len] or [seq_len, batch_size]
-            targets: Optional target tensor
+            inputs: Input tensor [batch_size, seq_len]
+            targets: Optional target tensor [batch_size]
             batch_idx: Starting index if not analyzing multiple examples
             store_attention: Whether to store attention patterns
             epoch: Current training epoch (for tracking)
             analyze_multiple_examples: Whether to analyze multiple examples
             max_examples: Maximum number of examples to analyze
-
+            random_sampling: Whether to randomly sample examples instead of taking first ones
+            random_seed: Optional seed for reproducible randomization
         Returns:
             Dict with token relationship analysis across examples
         """
+
+        import random
+        if random_seed is not None:
+            random.seed(random_seed)
+
         self.model.eval()
 
-        # Determine batch size and sequence length
-        if len(inputs.shape) >= 2:
-            batch_size = inputs.shape[0] if inputs.shape[0] <= inputs.shape[1] else inputs.shape[1]
-            seq_len = inputs.shape[1] if inputs.shape[0] <= inputs.shape[1] else inputs.shape[0]
+        # Standard PyTorch format: [batch_size, seq_len]
+        batch_size, seq_len = inputs.shape
 
-            # If inputs are [seq_len, batch_size], transpose to [batch_size, seq_len]
-            if inputs.shape[0] > inputs.shape[1]:
-                inputs = inputs.transpose(0, 1)
-                if targets is not None:
-                    targets = targets.transpose(0, 1) if len(targets.shape) >= 2 else targets
-        else:
-            batch_size, seq_len = 1, inputs.shape[0]
+        # Validate inputs
+        if len(inputs.shape) != 2:
+            raise ValueError(f"\t{get_current_callable_info()} @ {epoch}:\tExpected 2D input [batch_size, seq_len], got shape {inputs.shape}")
 
         # Limit number of examples to analyze
         if analyze_multiple_examples:
             num_examples = min(max_examples, batch_size)
-            example_indices = list(range(num_examples))
+            if random_sampling:
+                example_indices = random.sample(range(batch_size), num_examples)
+            else:
+                example_indices = list(range(num_examples))
         else:
             num_examples = 1
-            example_indices = [batch_idx]
+            if random_sampling and batch_idx > 1:
+                example_indices = [random.randint(0, batch_size - 1)]
+            else:
+                example_indices = [min(batch_idx, batch_size - 1)]  # Ensure valid index
 
-        print(f"Analyzing {num_examples} examples for circuit discovery...")
+        # print(f"\t{get_current_callable_info()} @ {epoch}:\t\tanalyze {num_examples} examples (batch_size={batch_size}, seq_len={seq_len})")
 
         # Storage for cross-example analysis
         all_copy_mechanisms = []
@@ -99,8 +105,8 @@ class TokenCircuitDiscovery:
             if example_idx >= batch_size:
                 continue
 
-            # Get single example
-            single_input = inputs[example_idx:example_idx + 1]  # Keep batch dimension
+            # Get single example - keep as [1, seq_len] to maintain batch dimension
+            single_input = inputs[example_idx:example_idx + 1]
             single_target = targets[example_idx:example_idx + 1] if targets is not None else None
 
             # Forward pass with attention storage
@@ -114,9 +120,9 @@ class TokenCircuitDiscovery:
             if store_attention and hasattr(self.model, 'get_attention_patterns'):
                 attention_patterns = self.model.get_attention_patterns()
 
-            # Convert to tokens
+            # Convert to tokens (use the single example)
             if hasattr(self.model, 'tokenize'):
-                tokens = self.model.tokenize(single_input[0])
+                tokens = self.model.tokenize(single_input[0])  # Remove batch dimension for tokenization
             else:
                 tokens = [f"token_{j}" for j in range(seq_len)]
 
@@ -164,7 +170,7 @@ class TokenCircuitDiscovery:
 
         # Return comprehensive analysis
         return {
-            "tokens": example_tokens[0] if example_tokens else [],  # Representative tokens
+            "tokens": example_tokens[0] if example_tokens else [],
             "all_example_tokens": example_tokens,
             "copy_mechanisms": all_copy_mechanisms,
             "induction_patterns": all_induction_patterns,
@@ -270,12 +276,40 @@ class TokenCircuitDiscovery:
             # For copy circuits, create a general pattern
             head = template.get('head', 'unknown')
 
-            # Find most common relative offset
-            offsets = [m.get('target_pos', 0) - m.get('source_pos', 0) for m in mechanisms]
+            # Find most common relative offset AND position patterns
+            offsets = []
+            source_positions = []
+            target_positions = []
+
+            for m in mechanisms:
+                src_pos = m.get('source_pos', -1)
+                tgt_pos = m.get('target_pos', -1)
+                if src_pos >= 0 and tgt_pos >= 0:
+                    offsets.append(tgt_pos - src_pos)
+                    source_positions.append(src_pos)
+                    target_positions.append(tgt_pos)
+
             most_common_offset = max(set(offsets), key=offsets.count) if offsets else 1
 
-            # Create circuit ID
-            circuit_id = f"copy_{head}_offset_{most_common_offset}_{epoch}"
+            # Get representative positions (most common source position)
+            most_common_source = max(set(source_positions), key=source_positions.count) if source_positions else -1
+            representative_target = most_common_source + most_common_offset if most_common_source >= 0 else -1
+
+            # ✅ FIXED: Pass all necessary kwargs for position_info generation
+            circuit_id = self.registry.generate_circuit_id(
+                operation_type="copy",
+                component_info=head,
+                epoch=epoch,
+                # Position information
+                relative_offset=most_common_offset,
+                source_pos=most_common_source,  # ✅ ADD: for absolute position info
+                target_pos=representative_target,  # ✅ ADD: for absolute position info
+                # Pattern information
+                consistency=len(mechanisms),
+                examples_found=len(mechanisms),
+                avg_strength=avg_strength,
+                source="consistent"
+            )
 
             # Create abstract circuit (not tied to specific tokens)
             circuit = Circuit(
@@ -300,27 +334,83 @@ class TokenCircuitDiscovery:
                     "operation_type": "copy",
                     "head": head,
                     "relative_offset": most_common_offset,
+                    "most_common_source_pos": most_common_source,
+                    "representative_target_pos": representative_target,
                     "examples_found": len(mechanisms),
-                    "consistency": len(mechanisms)  # How many examples showed this pattern
+                    "consistency": len(mechanisms),
+                    "avg_strength": avg_strength
                 },
                 discovered_at=epoch
             )
-
+            # print(f"\t{get_current_callable_info()} @ {epoch}:\tconsistent COPY\t{circuit_id} ")
             return circuit
 
         elif circuit_type == 'induction':
-            # Similar logic for induction circuits
             head = template.get('head', 'unknown')
-            circuit_id = f"induction_{head}_{epoch}"
+
+            # Extract pattern information from all mechanisms
+            pattern_distances = []  # Distance from inducer to target
+            induction_spans = []  # Distance from inducer to induced
+            inducer_positions = []
+            induced_positions = []
+            target_positions = []
+
+            for mech in mechanisms:
+                inducer_pos = mech.get('inducer_pos', -1)
+                induced_pos = mech.get('induced_pos', -1)
+                target_pos = mech.get('target_pos', -1)
+
+                if inducer_pos >= 0 and target_pos >= 0:
+                    pattern_distances.append(target_pos - inducer_pos)
+                    inducer_positions.append(inducer_pos)
+                    target_positions.append(target_pos)
+
+                if inducer_pos >= 0 and induced_pos >= 0:
+                    induction_spans.append(induced_pos - inducer_pos)
+                    induced_positions.append(induced_pos)
+
+            # Find most common patterns
+            most_common_distance = max(set(pattern_distances), key=pattern_distances.count) if pattern_distances else 1
+            most_common_span = max(set(induction_spans), key=induction_spans.count) if induction_spans else 1
+
+            # Representative positions
+            most_common_inducer = max(set(inducer_positions), key=inducer_positions.count) if inducer_positions else -1
+            most_common_induced = max(set(induced_positions), key=induced_positions.count) if induced_positions else -1
+            most_common_target = max(set(target_positions), key=target_positions.count) if target_positions else -1
+
+            # Determine pattern type based on distances
+            pattern_type = f"dist_{most_common_distance}_span_{most_common_span}"
+
+            # ✅ FIXED: Pass all necessary kwargs for induction circuits
+            circuit_id = self.registry.generate_circuit_id(
+                operation_type="induction",
+                component_info=head,
+                epoch=epoch,
+                # info parameters for induction type
+                pattern_type=pattern_type,
+                pattern_distance=most_common_distance,
+                induction_span=most_common_span,
+                # Position information
+                inducer_pos=most_common_inducer,  # ✅ ADD: for position info
+                induced_pos=most_common_induced,  # ✅ ADD: for position info
+                target_pos=most_common_target,  # ✅ ADD: for position info
+                # Consistency information
+                consistency=len(mechanisms),
+                examples_found=len(mechanisms),
+                avg_strength=avg_strength,
+                source="consistent"
+            )
 
             circuit = Circuit(
                 id=circuit_id,
                 type=CircuitType.TOKEN,
                 elements=[
                     Element(id=f"inducer_token", type=ElementType.TOKEN,
-                            properties={"role": "inducer"}),
+                            properties={"role": "inducer", "relative_position": 0}),
+                    Element(id=f"induced_token", type=ElementType.TOKEN,
+                            properties={"role": "induced", "relative_position": most_common_span}),
                     Element(id=f"target_token", type=ElementType.TOKEN,
-                            properties={"role": "target"}),
+                            properties={"role": "target", "relative_position": most_common_distance}),
                     Element(id=head, type=ElementType.HEAD,
                             properties={"name": head})
                 ],
@@ -334,8 +424,15 @@ class TokenCircuitDiscovery:
                 metadata={
                     "operation_type": "induction",
                     "head": head,
+                    "pattern_distance": most_common_distance,
+                    "induction_span": most_common_span,
+                    "pattern_type": pattern_type,
+                    "most_common_inducer_pos": most_common_inducer,
+                    "most_common_induced_pos": most_common_induced,
+                    "most_common_target_pos": most_common_target,
                     "examples_found": len(mechanisms),
-                    "consistency": len(mechanisms)
+                    "consistency": len(mechanisms),
+                    "avg_strength": avg_strength
                 },
                 discovered_at=epoch
             )
@@ -417,7 +514,7 @@ class TokenCircuitDiscovery:
             # Store in internal tracking
             self.token_circuits[circuit.id] = circuit
 
-        print(f"\t{get_current_callable_info()} @ {epoch}: \t{shorten_layer_head(circuits)}")
+        print(f"\t{get_current_callable_info()} @ {epoch}:\tcreated circuits\t{shorten_layer_head(circuits)}")
 
         # Return analysis results
         return {
@@ -430,14 +527,11 @@ class TokenCircuitDiscovery:
 
     def _compute_token_attribution(self, inputs, outputs, attention_patterns, batch_idx=0):
         """
-        info compute token attribution maps for all examples in the batch to be used in
-         analyze_token_relationship with analyzez all_batchs = False
-
         Compute token attribution map for a specific example in the batch
 
         Args:
-            inputs: Input tensor [seq_len, batch_size] or [batch_size, seq_len]
-            outputs: Output tensor
+            inputs: Input tensor [batch_size, seq_len]
+            outputs: Output tensor [batch_size, num_tokens]
             attention_patterns: Dict of attention patterns from all heads
             batch_idx: Which example in the batch to analyze
 
@@ -445,21 +539,28 @@ class TokenCircuitDiscovery:
             numpy.ndarray: [seq_len, seq_len] attribution matrix for the specific example
         """
 
-        # Determine sequence length from attention patterns
+        # Determine sequence length from inputs (standard format: [batch_size, seq_len])
+        if len(inputs.shape) >= 2:
+            batch_size, seq_len = inputs.shape
+        else:
+            batch_size, seq_len = 1, inputs.shape[0]
+
+        # Validate batch_idx
+        if batch_idx >= batch_size:
+            print(f"\t{get_current_callable_info()}: \twarning\tbatch_idx {batch_idx} >= batch_size {batch_size}, using batch_idx=0")
+            batch_idx = 0
+
+        # Double-check with attention patterns if available
         if attention_patterns:
             first_pattern = next(iter(attention_patterns.values()))
             if isinstance(first_pattern, torch.Tensor):
                 if len(first_pattern.shape) == 3:  # [batch_size, seq_len, seq_len]
-                    seq_len = first_pattern.shape[1]
-                elif len(first_pattern.shape) == 2:  # [seq_len, seq_len] (already for one example)
+                    pattern_seq_len = first_pattern.shape[1]
+                    if pattern_seq_len != seq_len:
+                        print(f"\t{get_current_callable_info()}: \twarning: Input seq_len {seq_len} doesn't match attention pattern seq_len {pattern_seq_len}")
+                        seq_len = pattern_seq_len  # Use the attention pattern's dimension
+                elif len(first_pattern.shape) == 2:  # [seq_len, seq_len] (single example)
                     seq_len = first_pattern.shape[0]
-                else:
-                    raise ValueError(f"Unexpected attention pattern shape: {first_pattern.shape}")
-            else:
-                seq_len = len(first_pattern)
-        else:
-            # Fallback: try to determine from inputs
-            seq_len = min(inputs.shape) if len(inputs.shape) >= 2 else inputs.shape[0]
 
         # Initialize attribution matrix for this specific example
         token_attribution = np.zeros((seq_len, seq_len))
@@ -475,12 +576,12 @@ class TokenCircuitDiscovery:
                 if batch_idx < pattern.shape[0]:
                     example_pattern = pattern[batch_idx]  # [seq_len, seq_len]
                 else:
-                    print(f"Warning: batch_idx {batch_idx} >= pattern batch size {pattern.shape[0]}")
+                    print(f"\t{get_current_callable_info()}:\twarning: batch_idx {batch_idx} >= pattern batch size {pattern.shape[0]}")
                     continue
             elif len(pattern.shape) == 2:  # [seq_len, seq_len] (single example or averaged)
                 example_pattern = pattern
             else:
-                print(f"Warning: Unexpected pattern shape for {head_name}: {pattern.shape}")
+                print(f"\t{get_current_callable_info()}:\tunexpected pattern shape for {head_name}: {pattern.shape}")
                 continue
 
             # Verify dimensions
@@ -488,13 +589,13 @@ class TokenCircuitDiscovery:
                 token_attribution += example_pattern
                 valid_patterns += 1
             else:
-                print(f"Skipping pattern {head_name}: shape {example_pattern.shape}, expected ({seq_len}, {seq_len})")
+                print(f"\t{get_current_callable_info()}: \tskipping pattern {head_name}: shape {example_pattern.shape}, expected ({seq_len}, {seq_len})")
 
         # Normalize by number of valid patterns
         if valid_patterns > 0:
             token_attribution = token_attribution / valid_patterns
         else:
-            print("Warning: No valid attention patterns found")
+            print(f"\t{get_current_callable_info()}:\twarning: No valid attention patterns found")
             return np.eye(seq_len)  # Identity matrix as fallback
 
         # Normalize rows to create probability distribution
@@ -600,7 +701,7 @@ class TokenCircuitDiscovery:
             if isinstance(first_pattern, torch.Tensor):
                 pattern_seq_len = first_pattern.shape[0]
                 if pattern_seq_len != seq_len:
-                    print(f"Warning: Inferred seq_len {seq_len} doesn't match attention pattern seq_len {pattern_seq_len}")
+                    print(f"\t{get_current_callable_info()}: \twarning: Inferred seq_len {seq_len} doesn't match attention pattern seq_len {pattern_seq_len}")
                     seq_len = pattern_seq_len  # Use the attention pattern's dimension
 
         # Initialize token attribution matrix with correct dimensions
@@ -617,13 +718,13 @@ class TokenCircuitDiscovery:
                 token_attribution += pattern
                 valid_patterns += 1
             else:
-                print(f"Skipping pattern {head_name}: shape {pattern.shape}, expected ({seq_len}, {seq_len})")
+                print(f"\t{get_current_callable_info()}:\tskipping pattern {head_name}: shape {pattern.shape}, expected ({seq_len}, {seq_len})")
 
         # Normalize by number of valid patterns
         if valid_patterns > 0:
             token_attribution = token_attribution / valid_patterns
         else:
-            print("Warning: No valid attention patterns found for token attribution")
+            print(f"\t{get_current_callable_info()}:\twarning: No valid attention patterns found for token attribution")
             return np.eye(seq_len)  # Return identity matrix as fallback
 
         # Normalize rows to sum to 1 (probability distribution)

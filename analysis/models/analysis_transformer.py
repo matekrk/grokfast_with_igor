@@ -9,14 +9,13 @@ from analysis.core.logger import DataLogger
 
 
 class Block(nn.Module):
-    """Causal transformer block with analysis capabilities
-    """
+    """Causal transformer block with analysis capabilities"""
 
     def __init__(self, dim, num_heads, mlp_hidden_mult=4, store_head_outputs=False):
         super().__init__()
         self.ln_1 = nn.LayerNorm(dim)
         self.ln_2 = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, num_heads)
+        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)  # Important: batch_first=True
         self.mlp = nn.Sequential(
             nn.Linear(dim, dim * mlp_hidden_mult),
             nn.GELU(),
@@ -31,18 +30,28 @@ class Block(nn.Module):
         self.attention_weights = None
         self.store_attention_weights = False
 
-        # New: Option to store per-head outputs
+        # Option to store per-head outputs
         self.store_head_outputs = store_head_outputs
         self.head_outputs = None
         self.normalized_input = None
 
     def forward(self, x):
+        """
+        Forward pass with batch-first format
+
+        Args:
+            x: Input tensor [batch_size, seq_len, dim]
+
+        Returns:
+            Output tensor [batch_size, seq_len, dim]
+        """
+        batch_size, seq_len, dim = x.shape
+
         # Create causal attention mask
-        attn_mask = torch.full(
-            (len(x), len(x)), -float("Inf"), device=x.device, dtype=x.dtype
+        attn_mask = torch.triu(
+            torch.full((seq_len, seq_len), float('-inf'), device=x.device, dtype=x.dtype),
+            diagonal=1
         )
-        attn_mask = torch.triu(attn_mask, diagonal=1)
-        attn_mask[torch.isnan(attn_mask)] = 0.0  # fixes all 'nan' on 'mps' device
 
         # First normalization layer
         x_norm = self.ln_1(x)
@@ -103,6 +112,45 @@ class Block(nn.Module):
 
         return x
 
+    def _compute_head_outputs(self, x_norm):
+        """Compute per-head outputs using attention weights and value projections"""
+        try:
+            # Extract attention weights [batch, num_heads, seq_len, seq_len]
+            attn_weights = self.attention_weights
+
+            # Get the in_proj_weight and parse out the value projection
+            in_proj_weight = self.attn.in_proj_weight
+            in_proj_bias = self.attn.in_proj_bias if hasattr(self.attn, 'in_proj_bias') else None
+
+            # Extract value projection weights
+            dim = self.dim
+            v_weight = in_proj_weight[2 * dim:]
+            v_bias = in_proj_bias[2 * dim:] if in_proj_bias is not None else None
+
+            # Compute value projections: [batch_size, seq_len, dim]
+            values = torch.nn.functional.linear(x_norm, v_weight, v_bias)
+
+            # Reshape for multi-head attention: [batch_size, seq_len, num_heads, head_dim]
+            batch_size, seq_len, _ = x_norm.size()
+            head_dim = self.head_dim
+
+            values = values.view(batch_size, seq_len, self.num_heads, head_dim)
+            values = values.permute(0, 2, 1, 3)  # [batch, heads, seq, head_dim]
+
+            # Compute per-head outputs by applying attention weights to values
+            # attn_weights: [batch, heads, seq_len, seq_len]
+            # values: [batch, heads, seq_len, head_dim]
+            # Result: [batch, heads, seq_len, head_dim]
+            head_outputs = torch.matmul(attn_weights, values)
+
+            # Store detached copy to avoid memory leaks
+            self.head_outputs = head_outputs.detach()
+        except Exception as e:
+            # If anything goes wrong, just don't store head outputs
+            self.head_outputs = None
+            print(f"Warning: Failed to compute head outputs: {e}")
+
+    # Add these methods back to the Block class in analysis_transformer.py
 
     def get_head_norms(self):
         """Calculate norms for each attention head"""
@@ -143,10 +191,12 @@ class Block(nn.Module):
             if self.store_head_outputs and self.head_outputs is not None:
                 try:
                     # Calculate head output activation norms if available
-                    # This is the norm of the actual activations, not weights
-                    head_output_norm = torch.norm(self.head_outputs[:, head_idx]).item()
-                    head_norms[f'head_{head_idx}_activation'] = head_output_norm
-                except:
+                    # head_outputs shape: [batch, heads, seq, head_dim]
+                    if head_idx < self.head_outputs.shape[1]:
+                        head_output = self.head_outputs[:, head_idx]  # [batch, seq, head_dim]
+                        head_output_norm = torch.norm(head_output).item()
+                        head_norms[f'head_{head_idx}_activation'] = head_output_norm
+                except Exception as e:
                     # Skip if we can't calculate activation norms
                     pass
 
@@ -166,7 +216,6 @@ class Block(nn.Module):
         mlp_norms['combined'] = mlp_norms['up'] * mlp_norms['down']
 
         # Add activation norms if we have access to activations
-        # This would require another hook to capture MLP activations
         if hasattr(self, 'mlp_activations') and self.mlp_activations is not None:
             try:
                 # Calculate norm of expanded representations (after first linear layer)
@@ -176,93 +225,70 @@ class Block(nn.Module):
 
         return mlp_norms
 
-    def _compute_head_outputs(self, x_norm):
-        """Compute per-head outputs using attention weights and value projections"""
-        try:
-            # Extract attention weights [batch, num_heads, seq_len, seq_len]
-            attn_weights = self.attention_weights
-
-            # Get the in_proj_weight and parse out the value projection
-            in_proj_weight = self.attn.in_proj_weight
-            in_proj_bias = self.attn.in_proj_bias if hasattr(self.attn, 'in_proj_bias') else None
-
-            # Extract value projection weights
-            dim = self.dim
-            v_weight = in_proj_weight[2 * dim:]
-            v_bias = in_proj_bias[2 * dim:] if in_proj_bias is not None else None
-
-            # Compute value projections
-            values = torch.nn.functional.linear(x_norm, v_weight, v_bias)
-
-            # Reshape for multi-head attention
-            seq_len, batch_size, _ = x_norm.size()
-            head_dim = self.head_dim
-
-            values = values.view(seq_len, batch_size, self.num_heads, head_dim)
-            values = values.permute(1, 2, 0, 3)  # [batch, heads, seq, head_dim]
-
-            # Compute per-head outputs by applying attention weights to values
-            # For each batch and head, we need to do:
-            # [seq_len, seq_len] @ [seq_len, head_dim] -> [seq_len, head_dim]
-            # But batched across all batches and heads
-
-            # This is a batched matrix multiplication between:
-            # attn_weights: [batch, heads, seq_len, seq_len]
-            # values: [batch, heads, seq_len, head_dim]
-            # The result should be [batch, heads, seq_len, head_dim]
-            head_outputs = torch.matmul(attn_weights, values)
-
-            # Store detached copy to avoid memory leaks
-            self.head_outputs = head_outputs.detach()
-        except Exception as e:
-            # If anything goes wrong, just don't store head outputs
-            self.head_outputs = None
-            print(f"Warning: Failed to compute head outputs: {e}")
-
     def get_head_output(self, head_idx, batch_idx=0, position_idx=-1):
-        """Get output for a specific head, batch, and position"""
+        """
+        Get output for a specific head, batch, and position
+
+        Args:
+            head_idx: Which attention head (0 to num_heads-1)
+            batch_idx: Which example in the batch (0 to batch_size-1)
+            position_idx: Which token position (-1 for last position)
+
+        Returns:
+            torch.Tensor or None: Head output for specified indices [head_dim]
+        """
         if not hasattr(self, 'head_outputs') or self.head_outputs is None:
             return None
 
         try:
-            # For position_idx=-1, get the last position (typically used for classification)
-            if position_idx < 0:
-                position_idx = self.head_outputs.size(2) + position_idx
+            # head_outputs shape: [batch, heads, seq, head_dim]
+            batch_size, num_heads, seq_len, head_dim = self.head_outputs.shape
 
-            # Return head output for specified indices
+            # Validate indices
+            if head_idx >= num_heads or head_idx < 0:
+                return None
+            if batch_idx >= batch_size or batch_idx < 0:
+                return None
+
+            # Handle negative position index
+            if position_idx < 0:
+                position_idx = seq_len + position_idx
+
+            if position_idx >= seq_len or position_idx < 0:
+                return None
+
+            # Return head output for specified indices: [head_dim]
             return self.head_outputs[batch_idx, head_idx, position_idx]
-        except:
+
+        except Exception as e:
+            print(f"Error in get_head_output: {e}")
             return None
 
 
-
 class Decoder(nn.Module):
-    """Causal Transformer decoder with analysis capabilities
-    """
+    """Causal Transformer decoder with analysis capabilities"""
 
     def __init__(self, dim=128, num_layers=2, num_heads=4, num_tokens=97,
                  seq_len=5, ratio=0.5,
                  criterion=nn.CrossEntropyLoss(), device='cpu', id=None,
-                 save_dir=None, checkpoint_dir=None, store_head_outputs=True):  # info whether to store the head attention outputs
+                 save_dir=None, checkpoint_dir=None, store_head_outputs=True):
         super().__init__()
         self.token_embeddings = nn.Embedding(num_tokens, dim)
         self.position_embeddings = nn.Embedding(seq_len, dim)
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
-            # Pass store_head_outputs to each Block
             self.layers.append(Block(dim=dim, num_heads=num_heads,
                                      store_head_outputs=store_head_outputs))
         self.ln_f = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, num_tokens, bias=False)
 
-        # info analysis settings
+        # Model parameters
         self.dim = dim
         self.num_layers = num_layers
         self.num_heads = num_heads
         self.num_tokens = num_tokens
         self.seq_len = seq_len
         self.ratio = ratio
-
         self.device = device
 
         # info loss function for evaluation
@@ -289,33 +315,81 @@ class Decoder(nn.Module):
             font="sans-serif",
             font_scale=1.0,
             palette=sns.color_palette("pastel"),
-
             rc={
                 "lines.linewidth": 1.0,
                 "axes.spines.right": False,
                 "axes.spines.top": False,
-            }, )
+            },
+        )
 
     def forward(self, x, store_attention=False):
+        """
+        Forward pass with standard batch-first format
+
+        Args:
+            x: Input tensor in format [batch_size, seq_len]
+            store_attention: Whether to store attention patterns
+
+        Returns:
+            Output logits for the last token [batch_size, num_tokens]
+        """
         # Set attention storage for this forward pass
         for layer in self.layers:
             layer.store_attention_weights = store_attention
 
-        # Check if input is batch-first and transpose if needed
-        # x should be in format [seq_len, batch_size] for the rest of the model
-        if len(x.shape) > 1 and x.shape[0] > x.shape[1]:  # Likely batch-first format
-            x = x.transpose(0, 1)  # Convert to sequence-first
+        # Ensure input is in batch-first format [batch_size, seq_len]
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)  # Add batch dimension if missing
 
+        batch_size, seq_len = x.shape
+
+        # Token embeddings: [batch_size, seq_len, dim]
         h = self.token_embeddings(x)
-        positions = torch.arange(x.size(0), device=x.device).unsqueeze(-1)
-        h = h + self.position_embeddings(positions).expand_as(h)
 
+        # Position embeddings: [seq_len, dim] -> [batch_size, seq_len, dim]
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, -1)
+        pos_emb = self.position_embeddings(positions)
+        h = h + pos_emb
+
+        # Pass through transformer layers
         for layer in self.layers:
-            h = layer(h)
+            h = layer(h)  # h remains [batch_size, seq_len, dim]
 
+        # Final layer norm
         h = self.ln_f(h)
+
+        # Project to vocabulary: [batch_size, seq_len, num_tokens]
         logits = self.head(h)
-        return logits[-1]
+
+        # Return logits for the last token: [batch_size, num_tokens]
+        return logits[:, -1, :]  # Take last token for each sequence in batch
+
+    def evaluate(self, eval_loader):
+        """Evaluation function that returns accuracy with standard format"""
+        self.eval()
+        correct = 0
+        total_elem = 0
+        total_loss = 0.0
+
+        with torch.no_grad():
+            for inputs, targets in eval_loader:
+                inputs, targets = inputs.to(self.device), targets.to(self.device)
+
+                # Forward pass - inputs are [batch_size, seq_len], outputs are [batch_size, num_tokens]
+                logits = self(inputs, store_attention=True)
+                loss = self.criterion(logits, targets)
+
+                # Calculate accuracy
+                predicted = logits.argmax(dim=-1)
+                correct += (predicted == targets).sum().item()
+                total_elem += targets.size(0)
+                total_loss += loss.item() * targets.size(0)
+
+        # Set back to training mode
+        self.train()
+
+        return (correct / total_elem if total_elem > 0 else 0.0,
+                total_loss / total_elem if total_elem > 0 else 0.0)
 
     def get_id(self):
         return self.id
@@ -556,31 +630,6 @@ class Decoder(nn.Module):
         # Calculate average entropy per head
         avg_entropies = {head: sum(vals) / len(vals) for head, vals in entropies.items()}
         return avg_entropies
-
-    def evaluate(self, eval_loader):
-        """Simple evaluation function that returns accuracy"""
-        self.eval()
-        correct = 0
-        total_elem = 0
-        total_loss = 0.0
-
-        with torch.no_grad():
-            for inputs, targets in eval_loader:
-                inputs, targets = inputs.to(self.device), targets.to(self.device)
-                logits = self(inputs, store_attention=True)
-                loss = self.criterion(logits, targets)
-                # Assuming last token prediction
-                last_token_preds = logits.argmax(dim=-1)
-                correct += (last_token_preds == targets).sum().item()
-                total_elem += targets.size(0)
-                total_loss += loss.item() * targets.size(0)
-
-        # info probably training mode should be the default (?) make it so
-        self.train()
-
-        return (correct / total_elem if total_elem > 0 else 0.0,
-                total_loss / total_elem if total_elem > 0 else 0.0)
-
 
     def visualize_attention(self, sample_input, title=None):
         """Visualize attention patterns for a sample input"""

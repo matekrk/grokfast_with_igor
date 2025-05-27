@@ -1,18 +1,20 @@
 # train_with_circuit_analysis.py
-import torch
-import numpy as np
+# import torch
+# import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
+# from typing import Dict, List, Optional, Any, Union
 
 from analysis.core.circuit_registry import CircuitRegistry
 from analysis.analyzers.integrated_token_discovery import IntegratedTokenCircuitDiscovery
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
 from analysis.analyzers.continuous_circuit_tracker import ContinuousCircuitTracker
 from analysis.analyzers.attention_pattern_analyzer import AttentionAnalyzer
+from analysis.core.circuit_schema import save_circuits, load_circuits, ElementType, CircuitType
 from analysis.trainers.utils import (
     evaluate, log_metrics, train_epoch, detect_grokking, process_jumps
 )
 from analysis.utils.utils import init_train_dataloader_state, get_current_callable_info, shorten_layer_head
+from gists.statistical_circuit_discovery import total_batches
 
 
 def train_with_circuit_analysis(
@@ -25,7 +27,9 @@ def train_with_circuit_analysis(
         log_interval=4,
         analyze_interval=2,
         circuit_sampling_freq=20,
-        checkpoint_interval=200):
+        checkpoint_interval=200,
+        randomize_circuit_analysis=True,
+):
     """
     Train a transformer model while analyzing circuit formation and evolution
 
@@ -62,14 +66,17 @@ def train_with_circuit_analysis(
     train_dataloader_state = init_train_dataloader_state(dataloader=train_loader)
     eval_dataloader_state = init_train_dataloader_state(dataloader=eval_loader)
 
-    # Initialize circuit registry
+    # info init  a shared circuit registry
     registry = CircuitRegistry(save_dir / "circuit_registry")
+    # info set a shared logger
+    shared_logger = model.logger if hasattr(model, 'logger') else None
 
     # Initialize weight tracker
     weight_tracker = EnhancedWeightSpaceTracker(
         model=model,
         save_dir=save_dir / "weight_tracking",
-        logger=model.logger if hasattr(model, 'logger') else None,
+        logger=shared_logger,
+        registry=registry,
         jump_detection_window=100,
         snapshot_freq=analyze_interval // 2,
         sliding_window_size=20,
@@ -81,14 +88,16 @@ def train_with_circuit_analysis(
     attention_analyzer = AttentionAnalyzer(
         model=model,
         save_dir=save_dir / "attention_analysis",
-        logger=model.logger if hasattr(model, 'logger') else None
+        logger=shared_logger,
+        registry=registry
     )
 
     # Initialize component circuit tracker
     circuit_tracker = ContinuousCircuitTracker(
         model=model,
         save_dir=save_dir / "circuit_tracking",
-        logger=model.logger if hasattr(model, 'logger') else None,
+        logger=shared_logger,
+        registry=registry,
         sampling_freq=circuit_sampling_freq,
         history_length=min(200, epochs // analyze_interval)
     )
@@ -97,6 +106,7 @@ def train_with_circuit_analysis(
     token_discovery = IntegratedTokenCircuitDiscovery(
         model=model,
         save_dir=save_dir / "token_circuits",
+        logger=shared_logger,
         circuit_registry=registry,
         attention_analyzer=attention_analyzer,
         circuit_tracker=circuit_tracker,
@@ -169,7 +179,7 @@ def train_with_circuit_analysis(
         should_analyze = epoch % analyze_interval == 0 or epoch == epochs - 1
 
         if should_analyze and eval_loader is not None:
-            print(f"Running circuit analysis at epoch {epoch}")
+            # print(f"\t{get_current_callable_info()} @ {epoch}:\t")
 
             # Ensure we have eval_stats
             if eval_stats is None:
@@ -187,18 +197,20 @@ def train_with_circuit_analysis(
                 eval_loader=eval_loader,
                 baseline_acc=baseline_acc
             )
+            # info now we can get the token-level circuits with
+            if "token_results" in epoch_results and "circuits" in epoch_results["token_results"]:
+                token_circuits = epoch_results['token_results']["circuits"]
+            else:
+                token_circuits = []
+            token_circuits_by_query = registry.query_circuits(circuit_type=CircuitType.TOKEN)
 
             # info analyze circuit relationships and evolution
             if len(token_discovery.evolution_tracker.epoch_to_circuits) >= 2:
                 lineage = token_discovery.evolution_tracker.track_circuit_lineage(epoch)
 
                 if lineage:
-                    print("\nCircuit Evolution:")
-                    print(f"\t{get_current_callable_info()} @ {epoch}: \tcircuit evolution")
-                    print(f"\t\tnew circuits: {len(lineage.get('new_circuits', []))}")
-                    print(f"\t\tevolved circuits: {len(lineage.get('evolved_circuits', {}))}")
-                    print(f"\t\tdefunct circuits: {len(lineage.get('defunct_circuits', []))}")
-
+                    print(f"\t{get_current_callable_info()} @ {epoch}: \tcircuit evolution:")
+                    print(f"\t\tnew:\t{len(lineage.get('new_circuits', []))}\tevolved: {len(lineage.get('evolved_circuits', {}))}\tdefunct: {len(lineage.get('defunct_circuits', []))}")
                     # Print transformations
                     transformations = lineage.get('transformations', {})
 
@@ -220,7 +232,7 @@ def train_with_circuit_analysis(
                 if cooperation and 'cooperating_groups' in cooperation:
                     cooperating_groups = cooperation['cooperating_groups']
                     if cooperating_groups:
-                        print("\nCircuit Cooperation:")
+                        # print("\nCircuit Cooperation:")
                         print(f"\t\tfound {len(cooperating_groups)} cooperating groups")
                         for i, group in enumerate(cooperating_groups):
                             print(f"\t\tgroup {i + 1}: {len(group['circuit_ids'])} circuits")
@@ -232,7 +244,7 @@ def train_with_circuit_analysis(
                     token_discovery.evolution_tracker.visualize_circuit_lineage(
                         start_epoch=start_epoch,
                         end_epoch=epoch,
-                        save_path=save_dir / f"visualizations/circuit_lineage_{epoch}.png"
+                        save_path=f"visualizations/circuit_lineage_{epoch}.png"
                     )
 
             # whatis ###########################################################
@@ -245,31 +257,29 @@ def train_with_circuit_analysis(
             if cooperation and 'cooperating_groups' in cooperation:
                 cooperating_groups = cooperation['cooperating_groups']
                 if cooperating_groups:
-                    print("\nCircuit Cooperation:")
-                    print(f"  Found {len(cooperating_groups)} cooperating groups")
+                    print(f"\t{get_current_callable_info()} @ {epoch}: \t\t{len(cooperating_groups)} cooperating groups")
                     for i, group in enumerate(cooperating_groups):
-                        print(f"  Group {i + 1}: {len(group['circuit_ids'])} circuits")
+                        print(f"\t\tgroup {i + 1}: {len(group['circuit_ids'])} circuits")
 
             if competition:
-                print("\nCircuit Competition:")
                 competing = competition.get('competing_pairs', [])
-                if competing:
-                    print(f"  Found {len(competing)} competing circuit pairs")
-
                 contention = competition.get('resource_contention', [])
-                if contention:
-                    print(f"  Found {len(contention)} resource contention cases")
-
                 interference = competition.get('interference_relationships', [])
-                if interference:
-                    print(f"  Found {len(interference)} interference relationships")
+                if competing or contention or interference:
+                    print(f"\t{get_current_callable_info()} @ {epoch}:\tcircuit competition found")
+                    if competing:
+                        print(f"\t\t{len(competing)} competing circuit pairs")
+                    if contention:
+                        print(f"\t\t{len(contention)} resource contention cases")
+                    if interference:
+                        print(f"\t\t{len(interference)} interference relationships")
 
             # Visualize circuit interactions
             token_discovery.evolution_tracker.visualize_circuit_interactions(
                 epoch=epoch,
                 competition_data=competition,
                 cooperation_data=cooperation,
-                save_path=save_dir / f"visualizations/circuit_interactions_{epoch}.png"
+                save_path=f"visualizations/circuit_interactions_{epoch}.png"
             )
             # whatis #################################################################
 
@@ -278,31 +288,36 @@ def train_with_circuit_analysis(
             # Modify the analyze_epoch section:
 
             if should_analyze and eval_loader is not None:
-                print(f"Running circuit analysis at epoch {epoch}")
+                print(f"\t{get_current_callable_info()} @ {epoch}:\tstatistical token circuit analysis block")
 
+                import random
+
+                total_batches = len(eval_loader)
+                min_batches_to_analyze = 3
+                num_batches_to_analyze = min (min_batches_to_analyze, total_batches)  # Analyze 3 batches instead of 1
+                selected_batch_indices = set(random.sample(range(total_batches, num_batches_to_analyze)))
                 # Analyze multiple batches for better statistics
                 circuit_results_list = []
-                num_batches_to_analyze = 3  # Analyze 3 batches instead of 1
 
-                eval_iter = iter(eval_loader)
-                for batch_num in range(num_batches_to_analyze):
-                    try:
-                        batch = next(eval_iter)
-                        inputs, targets = batch
-
+                # fixme add random selection of batches
+                # eval_iter = list(eval_loader)
+                for batch_idx, (inputs, targets) in enumerate(eval_loader):
+                    if batch_idx in selected_batch_indices:
                         # Run token circuit analysis on this batch
                         batch_results = token_discovery.analyze_token_relationships(
                             inputs=inputs,
                             targets=targets,
                             epoch=epoch,
                             analyze_multiple_examples=True,
-                            max_examples=5  # Analyze 5 examples per batch
+                            max_examples=5,  # Analyze 5 examples per batch
+                            random_sampling=True,
+                            random_seed=epoch * 1000 + batch_idx
                         )
 
                         circuit_results_list.append(batch_results)
-
-                    except StopIteration:
-                        break  # No more batches
+                        selected_batch_indices.remove(batch_idx)
+                    if not selected_batch_indices:
+                        break
 
                 # Combine results across batches
                 epoch_results = token_discovery.combine_batch_results(
@@ -340,11 +355,11 @@ def train_with_circuit_analysis(
 
                 # Visualize evolution
                 token_discovery.evolution_tracker.visualize_circuit_evolution(
-                    save_path=save_dir / f"visualizations/circuit_evolution_{epoch}.png"
+                    save_path=f"visualizations/circuit_evolution_{epoch}.png"
                 )
 
                 token_discovery.evolution_tracker.visualize_emergence_order(
-                    save_path=save_dir / f"visualizations/emergence_order_{epoch}.png"
+                    save_path=f"visualizations/emergence_order_{epoch}.png"
                 )
 
                 # Store dynamics analysis
@@ -369,6 +384,16 @@ def train_with_circuit_analysis(
                         cid1, cid2 = rel['circuit_pair']
                         print(f"  {i + 1}. {cid1} + {cid2}: {rel['co_occurrences']} co-occurrences")
 
+
+        if registry.circuit_logger.should_take_snapshot(epoch=epoch, total_epochs=epochs):
+            snapshot = registry.circuit_logger.snapshot_registry_state(epoch=epoch)
+            # info log major discoveries
+            if snapshot['total_circuits'] > 0:
+                print(f"\t{get_current_callable_info()} @ {epoch}: \t{snapshot['total_circuits']} total circuits discovered")
+                # info log circuit type distribution
+                type_summary = "\t".join([f"{t}-level: {c}" for t, c in snapshot['circuits_by_type'].items()])
+                print(f"\t\t{type_summary}")
+
         # 6. Save checkpoint
         if checkpointManager and (epoch % checkpoint_interval == 0 or epoch == epochs - 1):
             # Ensure we have eval_stats
@@ -383,7 +408,15 @@ def train_with_circuit_analysis(
             # Add circuit analysis data to checkpoint
             extra_data = {
                 'circuit_count': len(registry.circuits),
-                'weight_space_jumps': [j['epoch'] for j in weight_tracker.detected_jumps]
+                'weight_space_jumps': [j['epoch'] for j in weight_tracker.detected_jumps],
+                'top_circuits': [
+                    {
+                        'id': c.id,
+                        'type': c.type.value,  # Convert enum to value
+                        'attribution': round(c.attribution, 4)
+                    }
+                    for c in sorted(registry.circuits.values(), key=lambda x: x.attribution, reverse=True)[:5]
+                ]
             }
 
             checkpointManager.save_checkpoint(
@@ -399,6 +432,24 @@ def train_with_circuit_analysis(
                 force_save=False,
             )
 
+        # info save circuits registry
+        circuit_interval = 50
+        if epoch % circuit_interval == 0:
+            registry.save()
+            registry.circuit_logger.save_logs(epoch=epoch)
+            # info perform a circuitry cross-analysis
+            token_circuits = registry.query_circuits(circuit_type=CircuitType.TOKEN)
+            component_circuits = registry.query_circuits(circuit_type=CircuitType.COMPONENT)
+            subspace_circuits = registry.query_circuits(circuit_type=CircuitType.SUBSPACE)
+            functional_circuits = registry.query_circuits(circuit_type=CircuitType.FUNCTIONAL)
+            circuit_relationships = analyze_cross_level_relationships(
+                token_circuits=token_circuits,
+                component_circuits=component_circuits,
+                functional_circuits=functional_circuits
+            )
+
+
+
     # Final analysis of learning dynamics
     if token_discovery.evolution_tracker:
         final_dynamics = {
@@ -408,11 +459,11 @@ def train_with_circuit_analysis(
 
         # Create final visualizations
         token_discovery.evolution_tracker.visualize_circuit_evolution(
-            save_path=save_dir / "visualizations/final_circuit_evolution.png"
+            save_path="visualizations/final_circuit_evolution.png"
         )
 
         token_discovery.evolution_tracker.visualize_emergence_order(
-            save_path=save_dir / "visualizations/final_emergence_order.png"
+            save_path="visualizations/final_emergence_order.png"
         )
 
         # Store final dynamics
@@ -424,3 +475,55 @@ def train_with_circuit_analysis(
     print("Training and circuit analysis complete!")
 
     return model, analysis_results
+
+
+def analyze_cross_level_relationships(token_circuits, component_circuits, functional_circuits):
+    """Analyze relationships between different circuit levels"""
+    relationships = []
+
+    # Find token circuits implemented by component circuits
+    for token_circuit in token_circuits:
+        # Extract heads mentioned in token circuit
+        token_heads = [e.id for e in token_circuit.elements if e.type == ElementType.HEAD]
+
+        # Find component circuits that use the same heads
+        implementing_components = []
+        for comp_circuit in component_circuits:
+            comp_heads = [e.id for e in comp_circuit.elements if e.type == ElementType.HEAD]
+
+            # Check for overlap
+            if set(token_heads).intersection(set(comp_heads)):
+                implementing_components.append(comp_circuit.id)
+
+        if implementing_components:
+            relationships.append({
+                'token_circuit': token_circuit.id,
+                'implementing_components': implementing_components,
+                'relationship_type': 'implementation'
+            })
+
+    return relationships
+
+
+def test_circuit_serialization(registry, save_dir):
+    """Test that circuit serialization works correctly"""
+    try:
+        test_path = save_dir / "test_circuits.json"
+
+        # Save current circuits
+        circuits = list(registry.circuits.values())
+        if circuits:
+            save_circuits(circuits, test_path)
+
+            # Try to load them back
+            loaded_circuits = load_circuits(test_path)
+
+            print(f"✅ Circuit serialization test passed: {len(loaded_circuits)} circuits")
+
+            # Clean up test file
+            test_path.unlink()
+        else:
+            print("📝 No circuits to test serialization")
+
+    except Exception as e:
+        print(f"⚠️ Circuit serialization test failed: {e}")

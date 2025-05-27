@@ -453,7 +453,7 @@ class CheckpointManager:
         """
         old_freq = self.save_freq
         self.save_freq = new_frequency
-        print(f"\tCheckPointManager.save_circuit_analysis Checkpoint save frequency changed from {old_freq} to {new_frequency}")
+        print(f"\tCheckPointManager.save_circuit_analysis\tCheckpoint save frequency changed from {old_freq} to {new_frequency}")
         return old_freq
 
     def force_save_next(self):
@@ -501,7 +501,7 @@ class CheckpointManager:
             # Fallback for loggers without the method
             saved_path = self._save_legacy_logger_data(logger, log_path, categories)
 
-        print(f"\tCheckPointManager.save_logger_data(): @ {epoch} \t{saved_path}")
+        print(f"\tCheckPointManager.save_logger_data() @ {epoch}:\t{saved_path}")
         return saved_path
 
     def _save_legacy_logger_data(self, logger, file_path, categories=None):

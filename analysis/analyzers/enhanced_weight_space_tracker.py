@@ -8,12 +8,14 @@ import seaborn as sns
 import torch
 from sklearn.decomposition import PCA
 
+from analysis.utils.utils import get_current_callable_info
+
 
 # todo let EnhancedWeightSpaceTracker inherit from analysis.core.weight_space.WeightSpaceTracker
 class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
     """Enhanced tracker for model's trajectory in weight space with jump detection and analysis"""
 
-    def __init__(self, model, save_dir=None, pca_components=50, logger=None, snapshot_freq=10,
+    def __init__(self, model, save_dir=None, pca_components=50, logger=None, registry=None, snapshot_freq=10,
                  sliding_window_size=5, dense_sampling=True, jump_detection_window=100,
                  jump_threshold=1.0):
         # info initialization code...
@@ -26,7 +28,8 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         self.snapshot_freq = snapshot_freq
         self.jump_detection_window = jump_detection_window
         self.jump_threshold = jump_threshold
-        self.logger = logger if logger else model.logger if hasattr(model, 'logger') else None
+        self.logger = logger
+        self.registry = registry
 
         # Add sliding window parameters
         self.sliding_window_size = sliding_window_size  # Number of recent epochs to keep
@@ -163,8 +166,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                             'pre_jump_state': pre_jump_state,
                             'pre_jump_vector': pre_jump_vector
                         })
-                    print([np.linalg.norm(self.flattened_weights[-k - 1] - self.flattened_weights[-k - 2]) for k in
-                           range(len(self.recent_snapshots) - 1)])
+                    print(f"\t{get_current_callable_info()} @ {epoch}: \t{[np.linalg.norm(self.flattened_weights[-k - 1] - self.flattened_weights[-k - 2]) for k in range(len(self.recent_snapshots) - 1)]}")
 
         if should_store:
             self.flattened_weights.append(flattened_vector)
@@ -259,7 +261,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         snapshots = self.get_window_snapshots(jump_epoch, window_size)
 
         if len(snapshots) < 3:
-            print(f"\tEnhancedWeightSpaceTracker.analyze_extended_jump Not enough snapshots around jump at epoch {jump_epoch}")
+            print(f"\t{get_current_callable_info()}: \tnot enough snapshots around jump at epoch {jump_epoch}")
             return None
 
         # info calculate change trajectory
@@ -325,7 +327,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         # info get epoch numbers for epochs in jump window
         for pending_jump in self.pending_jumps:
             jump_epoch = pending_jump['jump_epoch']
-            print(f"\tEnhancedWeightSpaceTracker.analyze_pending_jumps: analyzing jump at epoch {jump_epoch}")
+            print(f"\t{get_current_callable_info()}: \tanalyzing jump at epoch {jump_epoch}")
 
             # info get pre jump epoch and state
             # fixme mini_train_steps
@@ -415,16 +417,16 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                                          f'jump_{jump_epoch}_top_head_{head}',
                                          jump_char['head_changes'][head]['pre_to_jump'])
 
-            print(f"\tEnhancedWeightSpaceTracker.analyze_pending_jumps Jump at {jump_epoch} characterized:")
-            print(f"\t\t  - Pre-jump epoch: {pre_jump_epoch}")
-            print(f"\t\t  - Post-jump epoch: {post_jump_snapshot['epoch']}")
-            print(f"\t\t  - Total change magnitude: {jump_char['total_magnitude']['pre_to_jump']:.4f}")
-            print(f"\t\t  - Top changing layers: {', '.join(jump_char['top_layers'])}")
-            print(f"\t\t  - Top changing heads: {', '.join(jump_char['top_heads'])}")
+            print(f"\t{get_current_callable_info()}: \tjump at {jump_epoch} characterized")
+            print(f"\t\tpre-jump epoch: {pre_jump_epoch}")
+            print(f"\t\tpost-jump epoch: {post_jump_snapshot['epoch']}")
+            print(f"\t\ttotal change magnitude: {jump_char['total_magnitude']['pre_to_jump']:.4f}")
+            print(f"\t\ttop changing layers: {', '.join(jump_char['top_layers'])}")
+            print(f"\t\ttop changing heads: {', '.join(jump_char['top_heads'])}")
 
             ########################################################################################################
             # info now we have balanced pre_jump, jump, and post_jump snapshots
-            print(f"\tEnhancedWeightSpaceTracker.analyze_pending_jumps Analyzing jump at {jump_epoch} with pre={pre_jump_epoch}, post={post_jump_snapshot['epoch']}")
+            print(f"\t{get_current_callable_info()}: \tanalyzing jump at {jump_epoch} with pre={pre_jump_epoch}, post={post_jump_snapshot['epoch']}")
 
             # info analysis with these snapshots
             analyzer_result = {}
@@ -949,7 +951,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
 
         # We need snapshots before and after the jump for comparison
         if jump_idx == 0 or jump_idx >= len(self.weight_snapshots) - 1:
-            print(f"\tEnhancedWeightSpaceTracker._analyze_jump Warning: Jump at index {jump_idx} is at the boundary of available snapshots")
+            print(f"\t{get_current_callable_info()}: \twarning: Jump at index {jump_idx} is at the boundary of available snapshots")
             return
 
         # Get snapshots before and after jump
@@ -1858,7 +1860,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         self._ensure_pca_fitted()
 
         if not self.pca_fitted:
-            print("\tEnhancedWeightSpaceTracker.analyze_phase_weight_spaces Not enough data to fit PCA. Need at least 3 weight snapshots.")
+            print(f"\t{get_current_callable_info()}: \tnot enough data to fit PCA. Need at least 3 weight snapshots.")
             return None
 
         # Get phase structure and transitions from analyzer

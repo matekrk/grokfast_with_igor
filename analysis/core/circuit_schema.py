@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Union, Any
 import json
 from enum import Enum
 from pathlib import Path
+from analysis.utils.utils import CircuitJSONEncoder, get_current_callable_info
 
 
 class CircuitType(Enum):
@@ -11,15 +12,15 @@ class CircuitType(Enum):
     COMPONENT = "component"
     FUNCTIONAL = "functional"
     HYBRID = "hybrid"
-
+    SUBSPACE = "subspace"   # ✅ Add for MLP subspace circuits
 
 class ElementType(Enum):
     TOKEN = "token"
     HEAD = "head"
     MLP = "mlp"
-    SUBSPACE = "subspace"
+    SUBSPACE = "subspace"  # ✅ Already there
     POSITION = "position"
-
+    LAYER = "layer"        # ✅ Add for layer-level elements
 
 class ConnectionType(Enum):
     ATTENTION = "attention"
@@ -122,23 +123,104 @@ class Circuit:
 
 
 def save_circuits(circuits: List[Circuit], filepath: Union[str, Path]) -> None:
-    """Save circuits to a JSON file"""
+    """Save circuits to a JSON file using custom encoder"""
     filepath = Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(filepath, 'w') as f:
-        json.dump({
-            "schema_version": "1.0",
-            "circuits": [c.to_dict() for c in circuits]
-        }, f, indent=2)
+    # ✅ UPDATED: Use CircuitJSONEncoder for robust serialization
+    try:
+        with open(filepath, 'w') as f:
+            json.dump({
+                "schema_version": "1.0",
+                "circuits": [c.to_dict() for c in circuits]
+            }, f, cls=CircuitJSONEncoder, indent=2)  # ✅ Use custom encoder
 
+        print(f"\t{get_current_callable_info()}:\t✅ Saved {len(circuits)} circuits to {filepath}")
+
+    except Exception as e:
+        print(f"\t{get_current_callable_info()}:\t⚠️ Error saving circuits with CircuitJSONEncoder: {e}")
+        # Fallback to basic JSON with data cleaning
+        _save_circuits_fallback(circuits, filepath)
+
+
+def _save_circuits_fallback(circuits: List[Circuit], filepath: Union[str, Path]):
+    """Fallback saving with data cleaning"""
+    try:
+        # Clean circuit data for basic JSON
+        cleaned_circuits = []
+        for circuit in circuits:
+            circuit_dict = circuit.to_dict()
+            cleaned_dict = _clean_for_basic_json(circuit_dict)
+            cleaned_circuits.append(cleaned_dict)
+
+        with open(filepath, 'w') as f:
+            json.dump({
+                "schema_version": "1.0",
+                "circuits": cleaned_circuits,
+                "note": "Saved with fallback cleaning - some data may be simplified"
+            }, f, indent=2)
+
+        print(f"\t{get_current_callable_info()}:\t📝 Saved {len(circuits)} circuits to {filepath} (with fallback cleaning)")
+
+    except Exception as e:
+        print(f"\t{get_current_callable_info()}:\t❌ Failed to save circuits even with fallback: {e}")
+
+def _clean_for_basic_json(obj):
+    """Clean object for basic JSON serialization"""
+    if isinstance(obj, dict):
+        return {k: _clean_for_basic_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_clean_for_basic_json(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return [_clean_for_basic_json(item) for item in obj]
+    elif isinstance(obj, Enum):
+        return obj.value
+    elif isinstance(obj, (int, float, str, bool)) or obj is None:
+        return obj
+    elif hasattr(obj, '__dict__'):
+        return _clean_for_basic_json(obj.__dict__)
+    else:
+        return str(obj)  # Convert to string as fallback
 
 def load_circuits(filepath: Union[str, Path]) -> List[Circuit]:
-    """Load circuits from a JSON file"""
-    with open(filepath, 'r') as f:
-        data = json.load(f)
+    """Load circuits from a JSON file with object reconstruction"""
 
-    schema_version = data.get("schema_version", "1.0")
-    # Version handling logic could go here
+    # ✅ UPDATED: Import load function for reconstruction
+    from analysis.utils.utils import load_circuit_logs
 
-    return [Circuit.from_dict(c) for c in data["circuits"]]
+    try:
+        # Try loading with reconstruction first
+        data = load_circuit_logs(filepath)
+
+        schema_version = data.get("schema_version", "1.0")
+        circuits_data = data.get("circuits", [])
+
+        # Convert back to Circuit objects
+        circuits = [Circuit.from_dict(c) for c in circuits_data]
+
+        print(f"\t{get_current_callable_info()}:\t✅ Loaded {len(circuits)} circuits from {filepath}")
+        return circuits
+
+    except Exception as e:
+        print(f"\t{get_current_callable_info()}:\t⚠️ Error loading with reconstruction: {e}")
+        # Fallback to basic JSON loading
+        return _load_circuits_basic(filepath)
+
+
+def _load_circuits_basic(filepath: Union[str, Path]) -> List[Circuit]:
+    """Fallback loading with basic JSON"""
+    try:
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+
+        schema_version = data.get("schema_version", "1.0")
+        circuits_data = data.get("circuits", [])
+
+        circuits = [Circuit.from_dict(c) for c in circuits_data]
+
+        print(f"\t{get_current_callable_info()}:\t📝 Loaded {len(circuits)} circuits from {filepath} (basic JSON)")
+        return circuits
+
+    except Exception as e:
+        print(f"\t{get_current_callable_info()}:\t❌ Failed to load circuits: {e}")
+        return []

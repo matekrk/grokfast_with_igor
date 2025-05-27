@@ -9,8 +9,9 @@ from analysis.core.circuit_schema import Circuit, Element, Connection, ElementTy
 class TokenOperationDetector:
     """Detector for common token-level operations in transformer models"""
 
-    def __init__(self, model):
+    def __init__(self, model, registry=None):
         self.model = model
+        self.registry = registry
 
     def detect_copy_mechanisms(self, attention_patterns: Dict[str, torch.Tensor],
                                threshold: float = 0.8) -> List[Dict[str, Any]]:
@@ -114,7 +115,16 @@ class TokenOperationDetector:
         strength = operation_data["strength"]
 
         # Create unique circuit ID
-        circuit_id = f"copy_{head}_{source_pos}_{target_pos}_{epoch}"
+        # circuit_id = f"copy_{head}_{source_pos}_{target_pos}_{epoch}"
+        circuit_id = self.registry.get_circuit_id(
+            operation_type="copy",
+            component_info=head,
+            epoch=epoch,
+            source_pos=source_pos,
+            target_pos=target_pos,
+            relative_offset= target_pos - source_pos,
+            source="individual",
+            consistency=1)
 
         # Create elements for source and target tokens
         source_token = Element(
@@ -181,7 +191,21 @@ class TokenOperationDetector:
         strength = operation_data["strength"]
 
         # Create unique circuit ID
-        circuit_id = f"induction_{head}_{inducer_pos}_{induced_pos}_{target_pos}_{epoch}"
+        # circuit_id = f"induction_{head}_{inducer_pos}_{induced_pos}_{target_pos}_{epoch}"
+        pattern_distance = target_pos - induced_pos
+        pattern_type = f"dist_{pattern_distance}"
+        circuit_id = self.registry.get_circuit_id(
+            operation_type="induction",
+            component_info=head,
+            epoch=epoch,
+            pattern_type=pattern_type,
+            inducer_pos=inducer_pos,
+            induced_pos=induced_pos,
+            target_pos=target_pos,
+            strength=strength,
+            source="individual",
+            consistency=1)
+
 
         # Create elements for tokens
         inducer_token = Element(

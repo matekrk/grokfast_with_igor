@@ -173,7 +173,178 @@ def find_closest_jump(jump_epochs, target_epoch):
 
 
 import re
+from typing import Union, List, Dict, Tuple
 
+
+def shorten_layer_head_extended(items: Union[str, List[str]],
+                                word_abbrev_pairs: List[Tuple[str, str]]) -> Union[str, List[str]]:
+    """
+    Extended version that handles multiple word-abbreviation pairs
+
+    Args:
+        items: Single string or list of strings
+        word_abbrev_pairs: List of (word, abbreviation) tuples in order
+
+    Returns:
+        Shortened string(s) with the same format
+
+    Example:
+        shorten_layer_head_extended(
+            "layer_1_head_2_block_3",
+            [("layer", "L"), ("head", "H"), ("block", "B")]
+        )
+        # Returns: "L1H2B3"
+    """
+    # Build pattern dynamically from word pairs
+    pattern_parts = []
+    replacement_parts = []
+
+    for i, (word, abbrev) in enumerate(word_abbrev_pairs, 1):
+        pattern_parts.append(f'{word}_(\\d+)')
+        replacement_parts.append(f'{abbrev}\\{i}')
+
+    pattern = '_'.join(pattern_parts)
+    replacement = ''.join(replacement_parts)
+
+    if isinstance(items, list):
+        return [re.sub(pattern, replacement, item) if item else "" for item in items]
+    else:
+        return re.sub(pattern, replacement, items) if items else ""
+
+
+def shorten_multi_word(items: Union[str, List[str]],
+                       word_abbrev_map: Dict[str, str]) -> Union[str, List[str]]:
+    """
+    More flexible version using dictionary mapping
+
+    Args:
+        items: Single string or list of strings
+        word_abbrev_map: Dictionary mapping words to abbreviations
+
+    Returns:
+        Shortened string(s)
+
+    Example:
+        shorten_multi_word(
+            "layer_1_head_2_block_3_neuron_45",
+            {"layer": "L", "head": "H", "block": "B", "neuron": "N"}
+        )
+        # Returns: "L1H2B3N45"
+    """
+
+    def replace_word(match):
+        word, num = match.groups()
+        abbrev = word_abbrev_map.get(word, word[0].upper())
+        return f"{abbrev}{num}"
+
+    # Pattern matches any word_number combination
+    pattern = r'([a-zA-Z]+)_(\d+)'
+
+    if isinstance(items, list):
+        return [re.sub(pattern, replace_word, item) if item else "" for item in items]
+    else:
+        return re.sub(pattern, replace_word, items) if items else ""
+
+
+def shorten_layer_head_variadic(items: Union[str, List[str]],
+                                *word_abbrev_pairs: Tuple[str, str]) -> Union[str, List[str]]:
+    """
+    Variadic version that takes multiple (word, abbreviation) arguments
+
+    Args:
+        items: Single string or list of strings
+        *word_abbrev_pairs: Variable number of (word, abbreviation) tuples
+
+    Returns:
+        Shortened string(s)
+
+    Example:
+        shorten_layer_head_variadic(
+            "layer_1_head_2_block_3",
+            ("layer", "L"), ("head", "H"), ("block", "B")
+        )
+        # Returns: "L1H2B3"
+    """
+    return shorten_layer_head_extended(items, list(word_abbrev_pairs))
+
+
+def shorten_transformer_components(items: Union[str, List[str]],
+                                   custom_abbrevs: Dict[str, str] = None) -> Union[str, List[str]]:
+    """
+    Specialized version for common transformer components
+
+    Args:
+        items: Single string or list of strings
+        custom_abbrevs: Optional custom abbreviations to override defaults
+
+    Returns:
+        Shortened string(s)
+    """
+    # Default abbreviations for common transformer components
+    default_abbrevs = {
+        "layer": "L",
+        "head": "H",
+        "block": "B",
+        "attention": "A",
+        "mlp": "M",
+        "neuron": "N",
+        "component": "C",
+        "circuit": "Ci",
+        "token": "T",
+        "position": "P"
+    }
+
+    # Merge with custom abbreviations
+    if custom_abbrevs:
+        abbrevs = {**default_abbrevs, **custom_abbrevs}
+    else:
+        abbrevs = default_abbrevs
+
+    return shorten_multi_word(items, abbrevs)
+
+
+# Example usage and tests
+if __name__ == "__main__":
+    # Test data
+    test_strings = [
+        "layer_1_head_2",
+        "layer_0_head_3_block_1",
+        "layer_2_head_1_attention_4_neuron_15",
+        "component_1_circuit_2_token_3"
+    ]
+
+    print("Original strings:")
+    for s in test_strings:
+        print(f"  {s}")
+
+    print("\n1. Extended version with ordered pairs:")
+    result1 = shorten_layer_head_extended(
+        test_strings[1],
+        [("layer", "L"), ("head", "H"), ("block", "B")]
+    )
+    print(f"  {test_strings[1]} -> {result1}")
+
+    print("\n2. Dictionary mapping version:")
+    abbrev_map = {"layer": "L", "head": "H", "block": "B", "attention": "A", "neuron": "N"}
+    result2 = shorten_multi_word(test_strings[2], abbrev_map)
+    print(f"  {test_strings[2]} -> {result2}")
+
+    print("\n3. Variadic version:")
+    result3 = shorten_layer_head_variadic(
+        test_strings[1],
+        ("layer", "L"), ("head", "H"), ("block", "B")
+    )
+    print(f"  {test_strings[1]} -> {result3}")
+
+    print("\n4. Transformer-specialized version:")
+    result4 = shorten_transformer_components(test_strings[2])
+    print(f"  {test_strings[2]} -> {result4}")
+
+    print("\n5. Processing list of strings:")
+    result5 = shorten_transformer_components(test_strings)
+    print("  Results:")
+    for orig, short in zip(test_strings, result5):
+        print(f"    {orig} -> {short}")
 
 def shorten_layer_head(items, word1="layer", word2="head", abbrev1="L", abbrev2="H"):
     """
@@ -743,3 +914,136 @@ def read_json(file_path):
     except json.JSONDecodeError:
         print(f"Error: Invalid JSON in file: {file_path}")
         return None
+
+
+import json
+import numpy as np
+import torch
+from enum import Enum
+from pathlib import Path
+
+
+class CircuitJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder for circuit data structures"""
+
+    def default(self, obj):
+        # Handle NumPy arrays
+        if isinstance(obj, np.ndarray):
+            return {
+                '_type': 'numpy_array',
+                'data': obj.tolist(),
+                'dtype': str(obj.dtype),
+                'shape': obj.shape
+            }
+
+        # Handle PyTorch tensors
+        elif isinstance(obj, torch.Tensor):
+            return {
+                '_type': 'torch_tensor',
+                'data': obj.detach().cpu().numpy().tolist(),
+                'shape': list(obj.shape),
+                'dtype': str(obj.dtype)
+            }
+
+        # Handle Enums
+        elif isinstance(obj, Enum):
+            return {
+                '_type': 'enum',
+                'class': obj.__class__.__name__,
+                'value': obj.value
+            }
+
+        # Handle Path objects
+        elif isinstance(obj, Path):
+            return {
+                '_type': 'path',
+                'path': str(obj)
+            }
+
+        # Handle sets
+        elif isinstance(obj, set):
+            return {
+                '_type': 'set',
+                'data': list(obj)
+            }
+
+        # Handle complex numbers
+        elif isinstance(obj, complex):
+            return {
+                '_type': 'complex',
+                'real': obj.real,
+                'imag': obj.imag
+            }
+
+        # Handle callable objects (functions, methods)
+        elif callable(obj):
+            return {
+                '_type': 'callable',
+                'name': getattr(obj, '__name__', str(obj)),
+                'info': 'function_or_method'
+            }
+
+        # Try to handle custom objects with __dict__
+        elif hasattr(obj, '__dict__'):
+            return {
+                '_type': 'custom_object',
+                'class': obj.__class__.__name__,
+                'data': self._clean_dict(obj.__dict__)
+            }
+
+        # Fallback to string representation
+        else:
+            return {
+                '_type': 'string_fallback',
+                'data': str(obj),
+                'original_type': type(obj).__name__
+            }
+
+    def _clean_dict(self, d):
+        """Clean dictionary of non-serializable items"""
+        cleaned = {}
+        for key, value in d.items():
+            try:
+                # Test if value is JSON serializable
+                json.dumps(value, cls=CircuitJSONEncoder)
+                cleaned[key] = value
+            except (TypeError, ValueError):
+                # Handle non-serializable values
+                cleaned[key] = self.default(value)
+        return cleaned
+
+
+def load_circuit_logs(json_path):
+    """Load circuit logs and reconstruct complex objects"""
+
+    def reconstruct_object(obj):
+        """Reconstruct objects from JSON representation"""
+        if isinstance(obj, dict):
+            if '_type' in obj:
+                obj_type = obj['_type']
+
+                if obj_type == 'numpy_array':
+                    return np.array(obj['data'], dtype=obj['dtype']).reshape(obj['shape'])
+                elif obj_type == 'torch_tensor':
+                    return torch.tensor(obj['data']).reshape(obj['shape'])
+                elif obj_type == 'enum':
+                    return obj['value']  # Return just the value
+                elif obj_type == 'path':
+                    return Path(obj['path'])
+                elif obj_type == 'set':
+                    return set(obj['data'])
+                elif obj_type == 'complex':
+                    return complex(obj['real'], obj['imag'])
+                else:
+                    return obj
+            else:
+                return {k: reconstruct_object(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [reconstruct_object(item) for item in obj]
+        else:
+            return obj
+
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+
+    return reconstruct_object(data)

@@ -35,6 +35,36 @@ class CircuitEvolutionTracker:
         self.circuit_relationships = {}  # (Circuit ID, Circuit ID) -> relationship data
         self.epoch_to_circuits = {}  # Epoch -> circuit IDs that were active
 
+    def save_figure_safe(self, fig,  filename, save_dir=None, **kwargs):
+        """
+        Save figure ensuring directory exists with sensible defaults.
+
+        Args:
+            fig: matplotlib figure
+            save_dir: base directory path
+            filename: relative filename (can include subdirs)
+            **kwargs: arguments passed to savefig (overrides defaults)
+        """
+        if save_dir is None:
+            save_dir = self.save_dir
+        save_path = Path(save_dir) / filename
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Set good defaults for ML plots
+        default_kwargs = {
+            'dpi': 300,
+            'bbox_inches': 'tight',
+            'facecolor': 'white',
+            'edgecolor': 'none',
+            'format': None  # Auto-detect from extension
+        }
+
+        # Override defaults with user-provided kwargs
+        default_kwargs.update(kwargs)
+
+        fig.savefig(save_path, **default_kwargs)
+        return save_path
+
     def update_circuit_evolution(self, epoch, circuits, token_attribution):
         """
         Track circuit evolution for a specific epoch
@@ -172,7 +202,7 @@ class CircuitEvolutionTracker:
             avg_emergence.keys(),
             key=lambda t: avg_emergence[t]
         )
-        print(f"\t{get_current_callable_info()}: ")
+        print(f"\t{get_current_callable_info()}:\t{get_current_callable_info()}: ")
 
         return {
             'circuits_by_type': circuits_by_type,
@@ -549,7 +579,7 @@ class CircuitEvolutionTracker:
                            style='dashdot')
 
         # Create visualization
-        plt.figure(figsize=(14, 12))
+        fig = plt.figure(figsize=(14, 12))
 
         # Node properties
         node_colors = []
@@ -628,9 +658,10 @@ class CircuitEvolutionTracker:
         plt.title(f"Circuit Cooperation and Competition at Epoch {epoch}")
         plt.axis('off')
         plt.tight_layout()
-
+        # save_path = self.save_dir / save_path
         if save_path:
-            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            self.save_figure_safe(fig=fig, filename=save_path, save_dir=self.save_dir)
+            # plt.savefig(save_path, bbox_inches='tight', dpi=300)
 
         return plt.gcf()
 
@@ -714,7 +745,7 @@ class CircuitEvolutionTracker:
                                    type='split')
 
         # Create visualization
-        plt.figure(figsize=(16, 12))
+        fig = plt.figure(figsize=(16, 12))
 
         # Layout that emphasizes temporal flow
         pos = {}
@@ -793,9 +824,10 @@ class CircuitEvolutionTracker:
         plt.title(f"Circuit Evolution from Epoch {start_epoch} to {end_epoch}")
         plt.axis('off')
         plt.tight_layout()
-
+        # save_path = self.save_dir / save_path
         if save_path:
-            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            self.save_figure_safe(fig=fig, filename=save_path, save_dir=self.save_dir)
+            # plt.savefig(save_path, bbox_inches='tight', dpi=300)
 
         return plt.gcf()
 
@@ -814,7 +846,7 @@ class CircuitEvolutionTracker:
             matplotlib Figure
         """
         # Create figure for circuit evolution
-        plt.figure(figsize=(12, 8))
+        fig = plt.figure(figsize=(12, 8))
 
         # Count circuits per epoch
         epochs = sorted(self.epoch_to_circuits.keys())
@@ -870,9 +902,10 @@ class CircuitEvolutionTracker:
         plt.title('Circuit Evolution Over Training')
         plt.legend()
         plt.grid(alpha=0.3)
-
+        # save_path = self.save_dir / save_path
         if save_path:
-            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            self.save_figure_safe(fig=fig, filename=save_path, save_dir=self.save_dir)
+            # plt.savefig(save_path, bbox_inches='tight', dpi=300)
 
         print(f"\t{get_current_callable_info()}:\t")
 
@@ -895,7 +928,7 @@ class CircuitEvolutionTracker:
             # Not enough data
             return None
 
-        plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(10, 6))
 
         # Create boxplot data
         boxplot_data = []
@@ -919,8 +952,9 @@ class CircuitEvolutionTracker:
         plt.ylabel('Emergence Epoch')
         plt.title('Circuit Emergence Order')
         plt.grid(axis='y', alpha=0.3)
-
+        # save_path = self.save_dir / save_path
         if save_path:
-            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            self.save_figure_safe(fig=fig, filename=save_path, save_dir=self.save_dir)
+            # plt.savefig(save_path, bbox_inches='tight', dpi=300)
 
         return plt.gcf()

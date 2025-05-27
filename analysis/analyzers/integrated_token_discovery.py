@@ -1,22 +1,24 @@
 # integrated_token_discovery.py
+import random
+
 import torch
 import numpy as np
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Union, Tuple
+# from pathlib import Path
+# from typing import Dict, List, Optional, Any, Union, Tuple
 
 from analysis.core.circuit_schema import Circuit, CircuitType
 from analysis.core.circuit_registry import CircuitRegistry
 from analysis.analyzers.token_circuit_discovery import TokenCircuitDiscovery
 from analysis.analyzers.circuit_evolution_tracker import CircuitEvolutionTracker
 # Fix the import path to match your file structure
-from analysis.analyzers.attention_pattern_analyzer import AttentionAnalyzer
+# from analysis.analyzers.attention_pattern_analyzer import AttentionAnalyzer
 from analysis.utils.utils import get_current_callable_info
 
 
 class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
     """Token circuit discovery that integrates with existing analysis tools"""
 
-    def __init__(self, model, save_dir=None, circuit_registry=None,
+    def __init__(self, model, save_dir=None, logger=None, circuit_registry=None,
                  attention_analyzer=None, circuit_tracker=None, weight_tracker=None):
         """
         Initialize the integrated token circuit discovery
@@ -29,7 +31,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
             circuit_tracker: Optional circuit tracker
             weight_tracker: Optional weight tracker
         """
-        super().__init__(model, save_dir, circuit_registry)
+        super().__init__(model=model, save_dir=save_dir, circuit_registry=circuit_registry)
 
         # Store references to existing analyzers
         self.attention_analyzer = attention_analyzer
@@ -40,13 +42,157 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
         self.evolution_tracker = CircuitEvolutionTracker(
             registry=self.registry,
             save_dir=save_dir / "evolution" if save_dir else None,
-            logger=model.logger if hasattr(model, 'logger') else None
+            logger=logger,
         )
 
         # Storage for integrated analysis results
         self.integrated_results = {}
 
+
+    # Add to integrated_token_discovery.py
     def analyze_epoch(self, epoch, eval_loader, baseline_acc=None):
+        """
+        Integrated analysis without needing a representative batch
+        """
+
+        # Token analysis with multiple random batches (as above)
+        total_batches = len(eval_loader)
+        num_batches_to_analyze = min(3, total_batches)
+        selected_batch_indices = random.sample(range(total_batches), num_batches_to_analyze)
+        selected_batch_indices.sort()
+
+        all_token_results = []
+
+        max_examples = 5
+        print(f"\t{get_current_callable_info()} @ {epoch}:\tprocess [analyze token relationships({len(selected_batch_indices)} batches x {max_examples} examples)]")
+
+        for batch_idx, (inputs, targets) in enumerate(eval_loader):
+            if batch_idx in selected_batch_indices:
+                batch_token_results = self.analyze_token_relationships(
+                    inputs=inputs,
+                    targets=targets,
+                    epoch=epoch,
+                    analyze_multiple_examples=True,
+                    max_examples=max_examples,
+                    random_sampling=True,
+                    random_seed=epoch + batch_idx,
+                )
+                all_token_results.append(batch_token_results)
+                selected_batch_indices.remove(batch_idx)
+                if not selected_batch_indices:
+                    break
+
+        # Combine token results
+        combined_token_results = self.combine_batch_results(all_token_results, epoch)
+        print(f"\t\t {len(combined_token_results['copy_mechanisms'])} copy mechanisms,\t{len(combined_token_results['induction_patterns'])} induction patterns")
+
+        # Run other analyses independently (they can sample their own data)
+        component_results = None
+        if self.circuit_tracker:
+            component_results = self.circuit_tracker.sample_circuits(
+                epoch=epoch,
+                eval_loader=eval_loader,  # 👈 Let circuit_tracker sample its own data
+                baseline_acc=baseline_acc
+            )
+
+        attention_results = None
+        if self.attention_analyzer:
+            attention_results = self.attention_analyzer.analyze(
+                eval_loader=eval_loader  # 👈 Let attention_analyzer sample its own data
+            )
+
+        # Update evolution tracking
+        evolution_results = self.evolution_tracker.update_circuit_evolution(
+            epoch=epoch,
+            circuits=combined_token_results["circuits"],
+            token_attribution=combined_token_results["token_attribution"]
+        )
+
+        return {
+            "token_results": combined_token_results,
+            "component_results": component_results,
+            "attention_results": attention_results,
+            "evolution_results": evolution_results
+        }
+
+
+    def combine_batch_results(self, all_token_results, epoch):
+        """Combine token circuit results from multiple batches"""
+        # Combine all circuits
+        all_circuits = []
+        all_copy_mechanisms = []
+        all_induction_patterns = []
+        all_attributions = []
+
+        for batch_results in all_token_results:
+            all_circuits.extend(batch_results.get("circuits", []))
+            all_copy_mechanisms.extend(batch_results.get("copy_mechanisms", []))
+            all_induction_patterns.extend(batch_results.get("induction_patterns", []))
+
+            # Collect attributions
+            if "token_attribution" in batch_results:
+                all_attributions.append(batch_results["token_attribution"])
+
+        # Average attribution across batches
+        if all_attributions:
+            avg_attribution = np.mean(all_attributions, axis=0)
+        else:
+            seq_len = 4  # Your sequence length
+            avg_attribution = np.eye(seq_len)
+
+        # Find circuits that appear across multiple batches (more robust)
+        robust_circuits = self._find_robust_cross_batch_circuits(
+            all_circuits, min_batch_appearances=2)
+
+        return {
+            "circuits": robust_circuits,
+            "copy_mechanisms": all_copy_mechanisms,
+            "induction_patterns": all_induction_patterns,
+            "token_attribution": avg_attribution,
+            "batches_analyzed": len(all_token_results),
+            "total_examples": sum(r.get("num_examples_analyzed", 0) for r in all_token_results)
+        }
+
+
+    def _find_robust_cross_batch_circuits(self, all_circuits, min_batch_appearances=2):
+        """Find circuits that appear consistently across multiple batches"""
+        circuit_patterns = {}
+
+        # Group circuits by their pattern/structure
+        for circuit in all_circuits:
+            # Create a pattern key based on circuit structure
+            pattern_key = self._get_circuit_pattern_key(circuit)
+
+            if pattern_key not in circuit_patterns:
+                circuit_patterns[pattern_key] = []
+            circuit_patterns[pattern_key].append(circuit)
+
+        # Keep only circuits that appear in multiple batches
+        robust_circuits = []
+        for pattern_key, circuits in circuit_patterns.items():
+            if len(circuits) >= min_batch_appearances:
+                # Use the circuit with highest attribution as representative
+                best_circuit = max(circuits, key=lambda c: c.attribution)
+                best_circuit.metadata['cross_batch_count'] = len(circuits)
+                robust_circuits.append(best_circuit)
+
+        return robust_circuits
+
+
+    def _get_circuit_pattern_key(self, circuit):
+        """Create a pattern key for circuit similarity comparison"""
+        # Use operation type and head information to create pattern
+        op_type = circuit.metadata.get('operation_type', 'unknown')
+        head = circuit.metadata.get('head', 'unknown_head')
+
+        # For copy circuits, include relative offset
+        if op_type == 'copy':
+            offset = circuit.metadata.get('relative_offset', 0)
+            return f"{op_type}_{head}_offset_{offset}"
+        else:
+            return f"{op_type}_{head}"
+
+    def analyze_epoch_single_repeating_batch(self, epoch, eval_loader, baseline_acc=None):
         """
         Integrated analysis for a specific epoch
 
@@ -164,7 +310,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
 
             # Find circuits that emerged near this jump
             nearby_circuits = []
-
+            print(f"\t\t{get_current_callable_info()} @ {epoch}: \t")
             for circuit_id, emergence_epoch in self.evolution_tracker.emergence_epochs.items():
                 if abs(emergence_epoch - jump_epoch) <= 10:  # Within 10 epochs
                     circuit = self.registry.get_circuit(circuit_id)
@@ -205,14 +351,14 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
             }
 
             # Log insights
-            print(f"\nJump at Epoch {jump_epoch} and Circuit Formation:")
-            print(f"  Circuits emerging before jump: {results[jump_epoch]['circuit_count_before']}")
-            print(f"  Circuits emerging after jump: {results[jump_epoch]['circuit_count_after']}")
+            print(f"\t{get_current_callable_info()} @ {epoch}: \tjump at Epoch {jump_epoch} and Circuit Formation:")
+            print(f"\t\tircuits emerging before jump: {results[jump_epoch]['circuit_count_before']}")
+            print(f"\t\tcircuits emerging after jump: {results[jump_epoch]['circuit_count_after']}")
 
             if behavior_change:
-                print("  Circuit behavior changes:")
+                print(f"\t{get_current_callable_info()} @ {epoch}: \tcircuit behavior changes:")
                 for circuit_id, change in behavior_change.items():
-                    print(f"    {circuit_id}: attribution {change['attribution_change']:.3f}")
+                    print(f"\t{get_current_callable_info()} @ {epoch}: \t{circuit_id}: attribution {change['attribution_change']:.3f}")
 
         return results
 
@@ -232,7 +378,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
         """
         # Store original state
         original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
-
+        print(f"\t{get_current_callable_info()}: \t")
         try:
             # Analyze behavior with pre-jump state
             self.model.load_state_dict(pre_state)
@@ -305,7 +451,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
                     'attribution': attribution,
                     'accuracy': accuracy
                 }
-
+        print(f"\t{get_current_callable_info()}: \t{behavior}")
         return behavior
 
     def analyze_circuit_cooperation(self, epoch, eval_loader):

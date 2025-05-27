@@ -4,21 +4,28 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+from analysis.core.circuit_registry import CircuitRegistry
+from analysis.core.circuit_schema import Element, ElementType, Circuit, CircuitType
+
 
 class MLPSparsityTracker:
     """Track the development of sparse representations in MLP layers"""
 
-    def __init__(self, model, save_dir, logger=None, activation_threshold=0.1):
+    def __init__(self, model, save_dir, logger=None, registry=None, activation_threshold=0.1):
         self.model = model
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True, parents=True)
-        self.logger = logger if logger else (model.logger if hasattr(model, 'logger') else None)
+        self.logger = logger
         self.activation_threshold = activation_threshold
+        self.registry = registry
 
         # info storage for tracking sparsity evolution
         self.sparsity_history = {}
         self.neuron_class_selectivity = {}
         self.activation_patterns = {}
+
+        self.activation_stats = {}      # info compressed activation statistics
+        self.active_neurons = {}        # info indices of active neurons in layers
 
         # info register hooks for capturing MLP activations
         self.hooks = []
@@ -92,6 +99,11 @@ class MLPSparsityTracker:
         # info analyze neuron selectivity for classes
         class_selectivity = self._calculate_class_selectivity(batch_activations, batch_classes)
 
+        # info store selective activations
+        for layer_name, activations in self.layer_activations.items():
+            if "mlp_expanded" in layer_name:
+                self._store_selective_activations(layer_name, activations, epoch=None)
+
         return {
             'avg_sparsity': avg_sparsity,
             'class_selectivity': class_selectivity,
@@ -158,6 +170,14 @@ class MLPSparsityTracker:
         # info analyze current sparsity patterns
         analysis_results = self.analyze_neuron_activity(eval_loader, class_labels)
 
+        # info Create circuits from sparsity patterns
+        sparsity_circuits = self._create_sparsity_circuits(analysis_results, epoch)
+
+        # info register circuits if registry is available
+        if self.registry:
+            for circuit in sparsity_circuits:
+                self.registry.register_circuit(circuit, source="sparsity_analysis")
+
         # info store results in history
         self.sparsity_history[epoch] = {
             'avg_sparsity': analysis_results['avg_sparsity'],
@@ -182,7 +202,10 @@ class MLPSparsityTracker:
         #  (e.g., after a detected phase transition)
         self._visualize_sparsity_patterns(epoch, analysis_results)
 
-        return analysis_results
+        return {
+            **analysis_results,
+            'sparsity_circuits': sparsity_circuits,
+        }
 
     def _summarize_selectivity(self, selectivity_data):
         """Summarize neuron selectivity data"""
@@ -213,6 +236,275 @@ class MLPSparsityTracker:
         """Count neurons with clear class selectivity"""
         return sum(1 for data in layer_selectivity.values()
                    if data.get('preferred_class') is not None)
+
+    def _create_sparsity_circuits(self, analysis_results, epoch):
+        """Create circuits from identified sparsity patterns"""
+        circuits = []
+
+        # 1. Create circuits for sparse subspaces
+        sparse_subspace_circuits = self._create_sparse_subspace_circuits(
+            analysis_results['avg_sparsity'], epoch)
+        circuits.extend(sparse_subspace_circuits)
+
+        # 2. Create circuits for class-selective neuron groups
+        selective_circuits = self._create_selective_neuron_circuits(
+            analysis_results['class_selectivity'], epoch)
+        circuits.extend(selective_circuits)
+
+        # 3. Create circuits for co-active neuron clusters
+        cluster_circuits = self._create_coactive_cluster_circuits(
+            analysis_results['sample_activations'], epoch)
+        circuits.extend(cluster_circuits)
+
+        return circuits
+
+    def _create_sparse_subspace_circuits(self, avg_sparsity, epoch):
+        """Create circuits for layers with high sparsity (sparse subspaces)"""
+        circuits = []
+        sparsity_threshold = 0.7  # Only create circuits for highly sparse layers
+
+        for layer_name, sparsity in avg_sparsity.items():
+            if sparsity >= sparsity_threshold:
+                # Extract layer index
+                layer_idx = self._extract_layer_index(layer_name)
+
+                # Generate circuit ID
+                circuit_id = self.registry.generate_circuit_id(
+                    operation_type="sparse_subspace",
+                    component_info=f"layer_{layer_idx}",
+                    epoch=epoch,
+                    sparsity_level=sparsity,
+                    source="sparsity_analysis"
+                ) if self.registry else f"sparse_subspace_layer_{layer_idx}_{epoch}"
+
+                # Create subspace element
+                subspace_element = Element(
+                    id=f"layer_{layer_idx}_sparse_subspace",
+                    type=ElementType.SUBSPACE,
+                    properties={
+                        "layer": layer_idx,
+                        "sparsity_level": sparsity,
+                        "activation_threshold": self.activation_threshold
+                    }
+                )
+
+                circuit = Circuit(
+                    id=circuit_id,
+                    type=CircuitType.FUNCTIONAL,
+                    elements=[subspace_element],
+                    connections=[],
+                    attribution=sparsity,  # Higher sparsity = higher attribution for sparse circuits
+                    metadata={
+                        "operation_type": "sparse_subspace",
+                        "layer": layer_idx,
+                        "sparsity_level": sparsity,
+                        "circuit_class": "computational_efficiency"
+                    },
+                    discovered_at=epoch
+                )
+
+                circuits.append(circuit)
+
+        return circuits
+
+    def _create_selective_neuron_circuits(self, class_selectivity, epoch):
+        """Create circuits for groups of class-selective neurons"""
+        circuits = []
+
+        for layer_name, layer_selectivity in class_selectivity.items():
+            if not layer_selectivity:
+                continue
+
+            layer_idx = self._extract_layer_index(layer_name)
+
+            # Group neurons by their preferred class
+            neurons_by_class = {}
+            for neuron_id, neuron_data in layer_selectivity.items():
+                preferred_class = neuron_data.get('preferred_class')
+                selectivity_score = neuron_data.get('score', 0)
+
+                if preferred_class is not None and selectivity_score > 0.3:  # High selectivity threshold
+                    if preferred_class not in neurons_by_class:
+                        neurons_by_class[preferred_class] = []
+
+                    neurons_by_class[preferred_class].append({
+                        'neuron_id': neuron_id,
+                        'selectivity_score': selectivity_score
+                    })
+
+            # Create circuit for each class with sufficient selective neurons
+            for class_label, neurons in neurons_by_class.items():
+                if len(neurons) >= 3:  # Need at least 3 selective neurons
+                    avg_selectivity = np.mean([n['selectivity_score'] for n in neurons])
+                    neuron_indices = [int(n['neuron_id'].replace('neuron_', '')) for n in neurons]
+
+                    # Generate circuit ID
+                    circuit_id = self.registry.generate_circuit_id(
+                        operation_type="class_selective_neurons",
+                        component_info=f"layer_{layer_idx}_class_{class_label}",
+                        epoch=epoch,
+                        selectivity_score=avg_selectivity,
+                        neuron_count=len(neurons),
+                        source="selectivity_analysis"
+                    ) if self.registry else f"selective_neurons_layer_{layer_idx}_class_{class_label}_{epoch}"
+
+                    # Create selective subspace element
+                    selective_element = Element(
+                        id=f"layer_{layer_idx}_class_{class_label}_selective",
+                        type=ElementType.SUBSPACE,
+                        properties={
+                            "layer": layer_idx,
+                            "preferred_class": class_label,
+                            "selective_neurons": neuron_indices,
+                            "avg_selectivity": avg_selectivity
+                        }
+                    )
+
+                    circuit = Circuit(
+                        id=circuit_id,
+                        type=CircuitType.FUNCTIONAL,
+                        elements=[selective_element],
+                        connections=[],
+                        attribution=avg_selectivity,
+                        metadata={
+                            "operation_type": "class_selective_neurons",
+                            "layer": layer_idx,
+                            "preferred_class": class_label,
+                            "neuron_count": len(neurons),
+                            "avg_selectivity": avg_selectivity,
+                            "circuit_class": "class_discrimination"
+                        },
+                        discovered_at=epoch
+                    )
+
+                    circuits.append(circuit)
+
+        return circuits
+
+    def _create_coactive_cluster_circuits(self, sample_activations, epoch, min_cluster_size=5):
+        """Create circuits for clusters of neurons that consistently activate together"""
+        circuits = []
+
+        if not sample_activations:
+            return circuits
+
+        # Group activations by layer
+        layer_activations = {}
+        for input_key, activation_data in sample_activations.items():
+            for layer_name, activations in activation_data.items():
+                if layer_name not in layer_activations:
+                    layer_activations[layer_name] = []
+                layer_activations[layer_name].append(activations)
+
+        # Find co-active clusters for each layer
+        for layer_name, all_activations in layer_activations.items():
+            if len(all_activations) < 3:  # Need sufficient samples
+                continue
+
+            layer_idx = self._extract_layer_index(layer_name)
+
+            # Stack activations: [n_samples, n_neurons]
+            activation_matrix = np.array(all_activations)
+
+            # Find clusters of co-active neurons using correlation
+            neuron_correlations = np.corrcoef(activation_matrix.T)  # [n_neurons, n_neurons]
+
+            # Find strongly correlated neuron groups
+            clusters = self._find_correlation_clusters(neuron_correlations, correlation_threshold=0.7)
+
+            for cluster_idx, neuron_indices in enumerate(clusters):
+                if len(neuron_indices) >= min_cluster_size:
+                    # Calculate cluster strength (average within-cluster correlation)
+                    cluster_correlations = neuron_correlations[np.ix_(neuron_indices, neuron_indices)]
+                    avg_correlation = np.mean(cluster_correlations[np.triu_indices_from(cluster_correlations, k=1)])
+
+                    # Generate circuit ID
+                    circuit_id = self.registry.generate_circuit_id(
+                        operation_type="coactive_cluster",
+                        component_info=f"layer_{layer_idx}_cluster_{cluster_idx}",
+                        epoch=epoch,
+                        correlation_strength=avg_correlation,
+                        cluster_size=len(neuron_indices),
+                        source="coactivation_analysis"
+                    ) if self.registry else f"coactive_cluster_layer_{layer_idx}_c{cluster_idx}_{epoch}"
+
+                    # Create cluster element
+                    cluster_element = Element(
+                        id=f"layer_{layer_idx}_cluster_{cluster_idx}",
+                        type=ElementType.SUBSPACE,
+                        properties={
+                            "layer": layer_idx,
+                            "cluster_neurons": neuron_indices,
+                            "avg_correlation": avg_correlation,
+                            "cluster_size": len(neuron_indices)
+                        }
+                    )
+
+                    circuit = Circuit(
+                        id=circuit_id,
+                        type=CircuitType.COMPONENT,  # Co-active clusters are component-level
+                        elements=[cluster_element],
+                        connections=[],
+                        attribution=avg_correlation,
+                        metadata={
+                            "operation_type": "coactive_cluster",
+                            "layer": layer_idx,
+                            "cluster_size": len(neuron_indices),
+                            "avg_correlation": avg_correlation,
+                            "circuit_class": "neural_coordination"
+                        },
+                        discovered_at=epoch
+                    )
+
+                    circuits.append(circuit)
+
+        return circuits
+
+    def _find_correlation_clusters(self, correlation_matrix, correlation_threshold=0.7):
+        """Find clusters of highly correlated neurons"""
+        n_neurons = correlation_matrix.shape[0]
+        visited = np.zeros(n_neurons, dtype=bool)
+        clusters = []
+
+        for i in range(n_neurons):
+            if visited[i]:
+                continue
+
+            # Find all neurons correlated with neuron i
+            cluster = [i]
+            visited[i] = True
+
+            # Expand cluster by finding correlated neurons
+            for j in range(i + 1, n_neurons):
+                if not visited[j] and correlation_matrix[i, j] >= correlation_threshold:
+                    # Check if j is also correlated with existing cluster members
+                    correlated_with_cluster = all(
+                        correlation_matrix[j, k] >= correlation_threshold * 0.8  # Slightly lower threshold
+                        for k in cluster
+                    )
+
+                    if correlated_with_cluster:
+                        cluster.append(j)
+                        visited[j] = True
+
+            if len(cluster) > 1:  # Only keep multi-neuron clusters
+                clusters.append(cluster)
+
+        return clusters
+
+    def _extract_layer_index(self, layer_name):
+        """Extract layer index from layer name like 'layer_0_mlp_expanded'"""
+        parts = layer_name.split('_')
+        for i, part in enumerate(parts):
+            if part == 'layer' and i + 1 < len(parts):
+                try:
+                    return int(parts[i + 1])
+                except ValueError:
+                    pass
+        return 0  # Default fallback
+
+
+
 
     def _visualize_sparsity_patterns(self, epoch, analysis_results):
         """Generate visualizations of sparsity patterns"""

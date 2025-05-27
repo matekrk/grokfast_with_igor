@@ -12,7 +12,8 @@ from analysis.models.analysis_transformer import Decoder
 from analysis.models.modular_data import create_modular_dataloaders
 from analysis.staged_experiment import staged_experiment_framework
 from analysis.utils.checkpoint_manager import GrokAwareCheckpointManager
-from analysis.utils.utils import create_model, create_optimizer, create_scheduler, find_closest_jump
+from analysis.utils.utils import create_model, create_optimizer, create_scheduler, find_closest_jump, \
+    get_current_callable_info
 from analysis.visualization.visualize_phases_anthropic_style import create_phase_visualizations
 
 from analysis.trainers.analysis import train_with_analysis
@@ -207,9 +208,9 @@ def main_with_phase_tracking(args, model, train_loader, eval_loader, criterion,
     summary = phase_analyzer.get_learning_phase_summary()
 
     # info print insights
-    print("\nLearning Phase Insights:")
+    print(f"\t{get_current_callable_info()}: \t")
     for insight in summary['insights']:
-        print(f" - {insight}")
+        print(f"\t\t{insight}")
 
     # info create the complete set of visualizations
     visualization_results = create_phase_visualizations(
