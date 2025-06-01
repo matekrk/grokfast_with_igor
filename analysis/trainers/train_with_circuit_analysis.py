@@ -2,9 +2,11 @@
 # import torch
 # import numpy as np
 from pathlib import Path
+
+from analysis.analyzers import AdaptiveTokenOperationDetector
 # from typing import Dict, List, Optional, Any, Union
 
-from analysis.core.circuit_registry import CircuitRegistry
+from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.analyzers.integrated_token_discovery import IntegratedTokenCircuitDiscovery
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
 from analysis.analyzers.continuous_circuit_tracker import ContinuousCircuitTracker
@@ -71,6 +73,7 @@ def train_with_circuit_analysis(
     # info set a shared logger
     shared_logger = model.logger if hasattr(model, 'logger') else None
 
+
     # Initialize weight tracker
     weight_tracker = EnhancedWeightSpaceTracker(
         model=model,
@@ -111,6 +114,11 @@ def train_with_circuit_analysis(
         attention_analyzer=attention_analyzer,
         circuit_tracker=circuit_tracker,
         weight_tracker=weight_tracker
+    )
+    # info create adaptive detector
+    adaptive_detector = AdaptiveTokenOperationDetector(
+        token_discovery.model,
+        token_discovery.registry
     )
 
     # Storage for analysis results

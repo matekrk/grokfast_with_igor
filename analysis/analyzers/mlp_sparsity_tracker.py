@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from analysis.core.circuit_registry import CircuitRegistry
+from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.core.circuit_schema import Element, ElementType, Circuit, CircuitType
 
 

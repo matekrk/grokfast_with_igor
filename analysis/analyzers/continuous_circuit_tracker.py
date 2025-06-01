@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from analysis.core.circuit_registry import CircuitRegistry
+from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.core.circuit_schema import Element, ElementType, Connection, ConnectionType, Circuit, CircuitType
 from analysis.utils.utils import shorten_layer_head, get_current_callable_info
 
@@ -260,6 +260,292 @@ class ContinuousCircuitTracker:
             'circuit_strengths': circuit_strengths,
             'connectivity_change': self.connectivity_evolution[-1] if self.connectivity_evolution else 0.0
         }
+
+
+
+
+
+
+
+
+
+
+    def sample_circuits_enhanced(self, epoch, eval_loader, baseline_acc,
+                                 adaptive_thresholds=None, current_accuracy=None,
+                                 logger=None):
+        """Enhanced circuit sampling with adaptive thresholds and logging"""
+
+        # Get adaptive thresholds
+        if adaptive_thresholds:
+            interaction_threshold = adaptive_thresholds.get_threshold(
+                "component_interaction", epoch, 1000, current_accuracy
+            )
+            stability_threshold = adaptive_thresholds.get_threshold(
+                "component_stability", epoch, 1000, current_accuracy
+            )
+        else:
+            interaction_threshold = 0.3
+            stability_threshold = 0.5
+
+        # Enhanced component interaction detection
+        component_interactions = self._detect_component_interactions_adaptive(
+            threshold_manager=adaptive_thresholds,
+            interaction_threshold=interaction_threshold,
+            stability_threshold=stability_threshold
+        )
+
+        # Validate component stability using registry temporal features
+        stable_interactions = self._validate_component_stability(
+            interactions=component_interactions,
+            registry=self.registry,
+            epoch=epoch
+        )
+
+        # Log component analysis results
+        if logger:
+            component_metrics = {
+                "total_interactions": len(component_interactions),
+                "stable_interactions": len(stable_interactions),
+                "stability_rate": len(stable_interactions) / max(1, len(component_interactions)),
+                "interaction_threshold": interaction_threshold
+            }
+            logger.log_metrics(component_metrics, step=epoch, category="component_analysis")
+
+        return {
+            "component_interactions": component_interactions,
+            "stable_interactions": stable_interactions,
+            "circuits": self._convert_interactions_to_circuits(stable_interactions, epoch)
+        }
+
+    def _detect_component_interactions_adaptive(self, threshold_manager,
+                                                interaction_threshold, stability_threshold):
+        """Enhanced component interaction detection with adaptive thresholds"""
+
+        interactions = []
+
+        # HEAD-HEAD INTERACTIONS with enhanced correlation analysis
+        head_correlations = self._compute_head_head_correlations_enhanced()
+        for (head1, head2), correlation in head_correlations.items():
+            if correlation > interaction_threshold:
+                # Statistical significance testing
+                significance = self._test_correlation_significance(head1, head2, correlation)
+                if significance > 0.95:  # 95% confidence
+                    interactions.append({
+                        "type": "head_head_interaction",
+                        "components": [head1, head2],
+                        "strength": correlation,
+                        "significance": significance,
+                        "interaction_type": "cooperative" if correlation > 0.7 else "moderate"
+                    })
+
+        # HEAD-MLP INTERACTIONS with cross-layer correlation
+        head_mlp_correlations = self._compute_head_mlp_correlations_enhanced()
+        for (head, mlp_layer), correlation in head_mlp_correlations.items():
+            if correlation > interaction_threshold:
+                interactions.append({
+                    "type": "head_mlp_interaction",
+                    "components": [head, f"mlp_{mlp_layer}"],
+                    "strength": correlation,
+                    "cross_layer": True
+                })
+
+        # MULTI-HEAD COOPERATION PATTERNS
+        cooperation_patterns = self._detect_multi_head_cooperation(stability_threshold)
+        interactions.extend(cooperation_patterns)
+
+        # RESOURCE COMPETITION DETECTION
+        competition_patterns = self._detect_resource_competition(stability_threshold)
+        interactions.extend(competition_patterns)
+
+        return interactions
+
+    def _validate_component_stability(self, interactions, registry, epoch):
+        """Validate component interactions using registry temporal features"""
+
+        stable_interactions = []
+
+        for interaction in interactions:
+            # Check temporal stability using registry metadata
+            components = interaction["components"]
+
+            # Find circuits that use these components
+            related_circuits = []
+            for circuit_id, circuit in registry.circuits.items():
+                circuit_components = [e.id for e in circuit.elements]
+                if any(comp in circuit_components for comp in components):
+                    related_circuits.append(circuit_id)
+
+            # Calculate stability score based on registry temporal data
+            if related_circuits:
+                stability_scores = []
+                for circuit_id in related_circuits:
+                    if circuit_id in registry.circuit_metadata:
+                        metadata = registry.circuit_metadata[circuit_id]
+                        stability_scores.append(metadata.stability_score)
+
+                avg_stability = sum(stability_scores) / len(stability_scores)
+
+                # Add stability information to interaction
+                interaction["temporal_stability"] = avg_stability
+                interaction["related_circuits"] = related_circuits
+
+                # Only include if sufficiently stable
+                if avg_stability > 0.3:  # Stability threshold
+                    stable_interactions.append(interaction)
+
+        return stable_interactions
+
+    def _convert_interactions_to_circuits(self, interactions, epoch):
+        """Convert component interactions to formal circuits with enhanced metadata"""
+
+        circuits = []
+
+        for interaction in interactions:
+            # Create circuit from interaction
+            circuit = self._create_component_circuit(interaction, epoch)
+
+            # Register with enhanced metadata
+            if hasattr(self, 'registry') and self.registry:
+                self.registry.register_circuit_enhanced(
+                    circuit=circuit,
+                    source="component_interaction_analysis",
+                    epoch=epoch,
+                    detection_method="enhanced_component_tracker",
+                    confidence=interaction["strength"],
+                    total_epochs=1000  # Adjust based on training
+                )
+
+            circuits.append(circuit)
+
+        return circuits
+
+    def _compute_head_head_correlations_enhanced(self):
+        """Enhanced correlation analysis with significance testing"""
+
+        correlations = {}
+
+        # Get attention patterns for all heads
+        for layer_idx in range(self.model.num_layers):
+            layer = self.model.layers[layer_idx]
+
+            # Store current attention weights
+            if hasattr(layer, 'attention_weights') and layer.attention_weights is not None:
+                for head_i in range(self.model.num_heads):
+                    for head_j in range(head_i + 1, self.model.num_heads):
+
+                        head_i_pattern = layer.attention_weights[0, head_i].detach().cpu().numpy()
+                        head_j_pattern = layer.attention_weights[0, head_j].detach().cpu().numpy()
+
+                        # Enhanced correlation with multiple metrics
+                        correlation = self._compute_enhanced_correlation(head_i_pattern, head_j_pattern)
+
+                        if abs(correlation) > 0.1:  # Only store meaningful correlations
+                            head_i_id = f"layer_{layer_idx}_head_{head_i}"
+                            head_j_id = f"layer_{layer_idx}_head_{head_j}"
+                            correlations[(head_i_id, head_j_id)] = correlation
+
+        return correlations
+
+    def _compute_head_mlp_correlations_enhanced(self):
+        """Enhanced head-MLP correlation analysis"""
+
+        correlations = {}
+
+        for layer_idx in range(self.model.num_layers):
+            layer = self.model.layers[layer_idx]
+
+            # Get attention patterns
+            if hasattr(layer, 'attention_weights') and layer.attention_weights is not None:
+
+                # Get MLP activations if available
+                if hasattr(layer, 'mlp_activations') and layer.mlp_activations is not None:
+                    mlp_activations = layer.mlp_activations.detach().cpu().numpy()
+
+                    for head_idx in range(self.model.num_heads):
+                        head_pattern = layer.attention_weights[0, head_idx].detach().cpu().numpy()
+
+                        # Correlate attention pattern with MLP activations
+                        correlation = self._correlate_head_mlp(head_pattern, mlp_activations)
+
+                        if abs(correlation) > 0.1:
+                            head_id = f"layer_{layer_idx}_head_{head_idx}"
+                            correlations[(head_id, layer_idx)] = correlation
+
+        return correlations
+
+    def _detect_resource_competition(self, threshold):
+        """Detect competition between components for same resources"""
+
+        competition_patterns = []
+
+        # Check for heads that compete for same attention targets
+        for layer_idx in range(self.model.num_layers):
+            layer = self.model.layers[layer_idx]
+
+            if hasattr(layer, 'attention_weights') and layer.attention_weights is not None:
+                attention_weights = layer.attention_weights[0]  # [num_heads, seq_len, seq_len]
+
+                # Find heads attending to same positions with high intensity
+                competition_groups = self._find_competition_groups(
+                    attention_weights, threshold, layer_idx
+                )
+                competition_patterns.extend(competition_groups)
+
+        return competition_patterns
+
+    def _detect_multi_head_cooperation(self, threshold):
+        """Detect cooperative attention patterns between multiple heads"""
+
+        cooperation_patterns = []
+
+        # Look for heads that attend to complementary positions
+        for layer_idx in range(self.model.num_layers):
+            layer = self.model.layers[layer_idx]
+
+            if hasattr(layer, 'attention_weights') and layer.attention_weights is not None:
+                attention_weights = layer.attention_weights[0]  # [num_heads, seq_len, seq_len]
+
+                # Find complementary attention patterns
+                for query_pos in range(attention_weights.shape[1]):
+                    head_attentions = attention_weights[:, query_pos, :]  # [num_heads, seq_len]
+
+                    # Look for heads that attend to different but complementary positions
+                    cooperation_groups = self._find_cooperation_groups(
+                        head_attentions, threshold, layer_idx, query_pos
+                    )
+                    cooperation_patterns.extend(cooperation_groups)
+
+        return cooperation_patterns
+
+    def _compute_enhanced_correlation(self, pattern1, pattern2):
+        """Compute enhanced correlation metrics"""
+
+        # Flatten patterns
+        flat1 = pattern1.flatten()
+        flat2 = pattern2.flatten()
+
+        # Pearson correlation
+        pearson_corr = np.corrcoef(flat1, flat2)[0, 1]
+
+        # Spearman correlation (rank-based)
+        from scipy.stats import spearmanr
+        spearman_corr, _ = spearmanr(flat1, flat2)
+
+        # Cosine similarity
+        from sklearn.metrics.pairwise import cosine_similarity
+        cosine_sim = cosine_similarity([flat1], [flat2])[0, 0]
+
+        # Weighted average of correlations
+        enhanced_correlation = (0.5 * pearson_corr + 0.3 * spearman_corr + 0.2 * cosine_sim)
+
+        return enhanced_correlation
+
+
+
+
+
+
+
 
     def _find_significant_interactions(self, eval_loader, batch_limit=5, interaction_threshold=0.3):
         """
@@ -632,6 +918,7 @@ class ContinuousCircuitTracker:
 
         return correct / total if total > 0 else 0.0
 
+    # fixme baseline_acc is unusd, in references is not filled todo remove here
     def _create_component_circuit(self, interaction_data, epoch, baseline_acc):
         """Create circuit for component interactions"""
         components = interaction_data['components']  # e.g., ['layer_0_head_1', 'layer_1_head_2']

@@ -7,7 +7,7 @@ import numpy as np
 # from typing import Dict, List, Optional, Any, Union, Tuple
 
 from analysis.core.circuit_schema import Circuit, CircuitType
-from analysis.core.circuit_registry import CircuitRegistry
+from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.analyzers.token_circuit_discovery import TokenCircuitDiscovery
 from analysis.analyzers.circuit_evolution_tracker import CircuitEvolutionTracker
 # Fix the import path to match your file structure

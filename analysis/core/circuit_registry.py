@@ -1,12 +1,23 @@
 # circuit_registry.py
-from typing import Dict, List, Optional, Any, Set
+from collections import defaultdict
+from typing import Dict, List, Optional, Any, Set, Tuple
 from pathlib import Path
 import json
+# import time
 
+# from .circuit_schema import (
+#     CircuitMetadata, EmergencePhase, CircuitStability, RelationshipType
+# )
+
+# import numpy as np
+
+# from analysis.core import ComputationalBudget
 from analysis.core.circuit_logger import CircuitLogger
-from analysis.core.circuit_schema import Circuit, CircuitType, save_circuits, load_circuits
+from analysis.core.circuit_schema import Circuit, CircuitType, save_circuits, load_circuits, RelationshipType, \
+    CircuitMetadata, EmergencePhase, CircuitStability
 from analysis.utils.utils import get_current_callable_info
-from analysis.utils.utils import CircuitJSONEncoder
+# from analysis.utils.utils import CircuitJSONEncoder
+# from analysis.validation import CircuitManipulationValidator
 
 
 class CircuitRegistry:
@@ -20,7 +31,12 @@ class CircuitRegistry:
         if self.storage_dir:
             self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-        self.circuit_logger = circuit_logger if circuit_logger else CircuitLogger(self, save_dir=self.storage_dir / "circuit_logger")
+        if circuit_logger:
+            self.circuit_logger = circuit_logger
+        elif self.storage_dir:
+            self.circuit_logger = CircuitLogger(self, save_dir=self.storage_dir / "circuit_logger")
+        else:
+            self.circuit_logger = CircuitLogger(self, save_dir=None)
 
     def is_stronger_circuit(self, new_circuit, existing_circuit):
         """Determine if new circuit is stronger than existing"""
@@ -240,3 +256,240 @@ class CircuitRegistry:
                 metadata = json.load(f)
                 self.sources = metadata.get("sources", {})
                 self.related_circuits = {k: set(v) for k, v in metadata.get("related_circuits", {}).items()}
+
+
+class EnhancedCircuitRegistry(CircuitRegistry):
+    """Enhanced registry with temporal tracking and relationship management"""
+
+    def __init__(self, storage_dir: Optional[Path] = None, circuit_logger=None):
+        """Initialize enhanced registry with temporal tracking"""
+        super().__init__(storage_dir, circuit_logger)
+
+        # Enhanced tracking data structures
+        self.circuit_metadata: Dict[str, CircuitMetadata] = {}
+        self.relationship_graph: Dict[str, Dict[str, RelationshipType]] = defaultdict(dict)
+        self.emergence_timeline: Dict[int, List[str]] = defaultdict(list)  # epoch -> circuit_ids
+        self.stability_tracker: Dict[str, List[int]] = defaultdict(list)  # circuit_id -> epochs_seen
+
+        # Method tracking for validation
+        self.detection_methods: Set[str] = set()
+        self.method_consistency: Dict[Tuple[str, str], float] = {}  # (method1, method2) -> agreement
+
+        print("✅ Enhanced circuit registry initialized")
+
+    def register_circuit_enhanced(self, circuit, source: str = "unknown",
+                                  epoch: int = 0, detection_method: str = "unknown",
+                                  confidence: float = 0.5, total_epochs: int = 1000,
+                                  **kwargs) -> bool:
+        """
+        Enhanced circuit registration with temporal and reliability tracking
+
+        Returns:
+            bool: True if circuit was registered (new or updated), False if rejected
+        """
+        # Initialize metadata if new circuit
+        if circuit.id not in self.circuit_metadata:
+            self.circuit_metadata[circuit.id] = CircuitMetadata(
+                first_detected=epoch,
+                detection_method=detection_method,
+                detection_confidence=confidence
+            )
+
+        metadata = self.circuit_metadata[circuit.id]
+
+        # Update temporal tracking
+        metadata.last_seen = epoch
+        if epoch not in metadata.detection_epochs:
+            metadata.detection_epochs.append(epoch)
+            self.stability_tracker[circuit.id].append(epoch)
+
+        # Update emergence timeline
+        if circuit.id not in self.emergence_timeline[epoch]:
+            self.emergence_timeline[epoch].append(circuit.id)
+
+        # Determine emergence phase
+        metadata.emergence_phase = self._classify_emergence_phase(epoch, total_epochs)
+
+        # Update stability classification
+        metadata.stability = self._classify_stability(circuit.id)
+
+        # Calculate stability score
+        metadata.stability_score = self._calculate_stability_score(circuit.id)
+
+        # Update strength history
+        metadata.strength_history.append((epoch, circuit.attribution))
+
+        # Check if we should register this circuit
+        should_register = self._should_register_circuit(circuit, metadata, confidence)
+
+        if should_register:
+            # Register with parent class (existing functionality)
+            super().register_circuit(circuit, source)
+
+            # Update additional metadata
+            metadata.consistency_score = self._calculate_consistency_score(circuit.id)
+
+            # Track detection method
+            self.detection_methods.add(detection_method)
+
+            return True
+        else:
+            return False
+
+    def register_circuit(self, circuit, source: str = "unknown"):
+        """Backward compatibility method - use basic registration"""
+        return self.register_circuit_enhanced(
+            circuit=circuit,
+            source=source,
+            epoch=0,
+            detection_method="legacy",
+            confidence=0.5
+        )
+
+    def add_relationship(self, circuit_id1: str, circuit_id2: str,
+                         relationship: RelationshipType, strength: float = 1.0):
+        """Add relationship between circuits with bidirectional tracking"""
+        self.relationship_graph[circuit_id1][circuit_id2] = relationship
+
+        # Update circuit metadata if both circuits exist
+        if circuit_id1 in self.circuit_metadata and circuit_id2 in self.circuit_metadata:
+            meta1 = self.circuit_metadata[circuit_id1]
+            meta2 = self.circuit_metadata[circuit_id2]
+
+            # Update relationship sets based on type
+            if relationship == RelationshipType.PREREQUISITE:
+                meta1.enables_circuits.add(circuit_id2)
+                meta2.prerequisite_circuits.add(circuit_id1)
+            elif relationship == RelationshipType.COMPETITIVE:
+                meta1.competes_with.add(circuit_id2)
+                meta2.competes_with.add(circuit_id1)
+            elif relationship == RelationshipType.COOPERATIVE:
+                meta1.cooperates_with.add(circuit_id2)
+                meta2.cooperates_with.add(circuit_id1)
+
+    def get_circuits_by_phase(self, phase: EmergencePhase) -> List:
+        """Get circuits by emergence phase"""
+        return [
+            self.circuits[cid] for cid, metadata in self.circuit_metadata.items()
+            if metadata.emergence_phase == phase and cid in self.circuits
+        ]
+
+    def get_circuits_by_stability(self, stability: CircuitStability) -> List:
+        """Get circuits by stability classification"""
+        return [
+            self.circuits[cid] for cid, metadata in self.circuit_metadata.items()
+            if metadata.stability == stability and cid in self.circuits
+        ]
+
+    def get_circuits_by_type(self, circuit_type) -> List:
+        """Get circuits by type (enhanced version)"""
+        return [
+            circuit for circuit in self.circuits.values()
+            if circuit.type == circuit_type
+        ]
+
+    def get_emergence_timeline(self) -> Dict[int, List[str]]:
+        """Get timeline of circuit emergence"""
+        return dict(self.emergence_timeline)
+
+    def get_circuit_relationships(self, circuit_id: str) -> Dict[str, RelationshipType]:
+        """Get all relationships for a circuit"""
+        return dict(self.relationship_graph.get(circuit_id, {}))
+
+    def _classify_emergence_phase(self, epoch: int, total_epochs: int) -> EmergencePhase:
+        """Classify emergence phase based on epoch and total training"""
+        if epoch < 100:
+            return EmergencePhase.EARLY
+        elif epoch < min(500, total_epochs * 0.5):
+            return EmergencePhase.MIDDLE
+        elif epoch < min(800, total_epochs * 0.8):
+            return EmergencePhase.LATE
+        else:
+            return EmergencePhase.POST_GROKKING
+
+    def _classify_stability(self, circuit_id: str) -> CircuitStability:
+        """Classify circuit stability based on detection history"""
+        epochs_seen = self.stability_tracker.get(circuit_id, [])
+
+        if len(epochs_seen) < 2:
+            return CircuitStability.TRANSIENT
+        elif len(epochs_seen) < 5:
+            return CircuitStability.EMERGING
+        elif len(epochs_seen) >= 10:
+            return CircuitStability.PERSISTENT
+        else:
+            return CircuitStability.STABLE
+
+    def _calculate_stability_score(self, circuit_id: str) -> float:
+        """Calculate numerical stability score (0.0 to 1.0)"""
+        epochs_seen = self.stability_tracker.get(circuit_id, [])
+
+        if len(epochs_seen) < 2:
+            return 0.1  # Very unstable
+
+        # Check for recent presence (last 20 epochs)
+        if epochs_seen:
+            recent_epochs = [e for e in epochs_seen if e >= max(epochs_seen) - 20]
+            recency_score = len(recent_epochs) / min(20, len(epochs_seen))
+
+            # Check for consistency over time span
+            time_span = max(epochs_seen) - min(epochs_seen) + 1
+            consistency_score = len(epochs_seen) / max(1, time_span)
+
+            return min(1.0, (recency_score + consistency_score) / 2)
+
+        return 0.1
+
+    def _should_register_circuit(self, circuit, metadata: CircuitMetadata,
+                                 confidence: float) -> bool:
+        """Determine if circuit should be registered based on quality criteria"""
+        # Minimum confidence threshold
+        if confidence < 0.3:
+            return False
+
+        # Stability requirements - transient circuits need higher confidence
+        if metadata.stability == CircuitStability.TRANSIENT and confidence < 0.7:
+            return False
+
+        # For existing circuits, check if this is an improvement
+        if circuit.id in self.circuits:
+            existing_metadata = self.circuit_metadata[circuit.id]
+            return (confidence > existing_metadata.detection_confidence or
+                    metadata.stability_score > existing_metadata.stability_score)
+
+        return True
+
+    def _calculate_consistency_score(self, circuit_id: str) -> float:
+        """Calculate consistency score across detection methods and epochs"""
+        # This is a placeholder - in full implementation would compare
+        # results across different detection methods
+        epochs_seen = len(self.stability_tracker.get(circuit_id, []))
+        return min(1.0, epochs_seen / 10.0)  # Max score after 10 sightings
+
+    def get_registry_summary(self) -> Dict[str, Any]:
+        """Get comprehensive summary of registry state"""
+        summary = {
+            "total_circuits": len(self.circuits),
+            "circuits_by_type": {},
+            "circuits_by_phase": {},
+            "circuits_by_stability": {},
+            "total_relationships": sum(len(rels) for rels in self.relationship_graph.values()),
+            "detection_methods": list(self.detection_methods)
+        }
+
+        # Count by type
+        for circuit in self.circuits.values():
+            circuit_type = circuit.type.value
+            summary["circuits_by_type"][circuit_type] = summary["circuits_by_type"].get(circuit_type, 0) + 1
+
+        # Count by phase
+        for metadata in self.circuit_metadata.values():
+            phase = metadata.emergence_phase.value
+            summary["circuits_by_phase"][phase] = summary["circuits_by_phase"].get(phase, 0) + 1
+
+        # Count by stability
+        for metadata in self.circuit_metadata.values():
+            stability = metadata.stability.value
+            summary["circuits_by_stability"][stability] = summary["circuits_by_stability"].get(stability, 0) + 1
+
+        return summary

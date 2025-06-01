@@ -5,11 +5,12 @@ from typing import Optional, Union
 from pathlib import Path
 
 # from analysis.core.circuit_schema import Circuit, Element, Connection, ElementType, ConnectionType, CircuitType
-from analysis.core.circuit_registry import CircuitRegistry
+from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.core.circuit_schema import Circuit, CircuitType, Element, ElementType, Connection, ConnectionType, \
     save_circuits
 from analysis.utils.utils import get_current_callable_info, shorten_layer_head
-from analysis.analyzers.token_operations import TokenOperationDetector
+from analysis.analyzers.adaptive_token_operations import AdaptiveTokenOperationDetector
+
 
 
 class TokenCircuitDiscovery:
@@ -37,7 +38,7 @@ class TokenCircuitDiscovery:
         self.registry = circuit_registry
 
         # Initialize operation detector
-        self.operation_detector = TokenOperationDetector(model, self.registry)
+        self.operation_detector = AdaptiveTokenOperationDetector(model, self.registry)
 
         # Storage for token-level analysis
         self.token_attribution_maps = {}  # Maps output tokens to input token influences

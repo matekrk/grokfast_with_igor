@@ -178,3 +178,9 @@ try.ipynb
 /assets/
 /analysis/tmp/
 /analysis/visualization/anthropic_style_transformer.png
+/analysis/tests/
+/analysis/tests/
+/analysis/tests/__init__.py
+/analysis/tests/test_day1.py
+/analysis/tests/test_day1_changes.py
+/analysis/tests/test_day2_infrastuture.py

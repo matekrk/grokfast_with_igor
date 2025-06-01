@@ -5,7 +5,7 @@ from typing import Optional
 from typing import Union
 from pathlib import Path
 
-from circuit_registry import CircuitRegistry
+from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.analyzers.token_circuit_discovery import TokenCircuitDiscovery
 from analysis.visualization.token_visualizer import TokenCircuitVisualizer
 

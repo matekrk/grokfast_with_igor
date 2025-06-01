@@ -1,10 +1,11 @@
 # circuit_schema.py
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Union, Any
+from typing import Set, Tuple, Dict, List, Optional, Union, Any
 import json
 from enum import Enum
 from pathlib import Path
 from analysis.utils.utils import CircuitJSONEncoder, get_current_callable_info
+
 
 
 class CircuitType(Enum):
@@ -27,6 +28,35 @@ class ConnectionType(Enum):
     RESIDUAL = "residual"
     MLP = "mlp"
     COMPOSITE = "composite"
+
+class EmergencePhase(Enum):
+    """Circuit emergence phases during training"""
+    EARLY = "early"          # 0-100 epochs, often noisy
+    MIDDLE = "middle"        # 100-500 epochs, genuine learning
+    LATE = "late"           # 500+ epochs, refined mechanisms
+    GROKKING = "grokking"   # During phase transitions
+    POST_GROKKING = "post_grokking"  # After stabilization
+
+
+class CircuitStability(Enum):
+    """Circuit stability classifications"""
+    TRANSIENT = "transient"     # Seen <3 times
+    EMERGING = "emerging"       # Recent appearance, increasing
+    STABLE = "stable"          # Consistent presence
+    PERSISTENT = "persistent"   # Long-term presence
+    DECLINING = "declining"     # Decreasing presence
+    DEFUNCT = "defunct"        # No longer present
+
+
+class RelationshipType(Enum):
+    """Types of relationships between circuits"""
+    PREREQUISITE = "prerequisite"       # A enables B
+    COMPETITIVE = "competitive"         # A competes with B
+    COOPERATIVE = "cooperative"         # A works with B
+    COMPOSITIONAL = "compositional"     # A is part of B
+    ALTERNATIVE = "alternative"         # A can replace B
+    SUPER_ADDITIVE = "super_additive"   # A+B > A+B individually
+
 
 
 @dataclass
@@ -120,6 +150,97 @@ class Circuit:
             metadata=data.get("metadata", {}),
             discovered_at=data.get("discovered_at")
         )
+
+
+@dataclass
+class CircuitMetadata:
+    """Enhanced metadata for circuit tracking"""
+    # Temporal information
+    first_detected: int = 0
+    last_seen: int = 0
+    detection_epochs: List[int] = field(default_factory=list)
+    emergence_phase: EmergencePhase = EmergencePhase.EARLY
+    stability: CircuitStability = CircuitStability.TRANSIENT
+
+    # Detection context
+    detection_method: str = "unknown"
+    detection_threshold: float = 0.5
+    detection_confidence: float = 0.5
+    content_aware: bool = False
+
+    # Reliability metrics
+    stability_score: float = 0.0
+    false_positive_risk: float = 0.5
+    consistency_score: float = 0.0
+    behavioral_impact: float = 0.0
+
+    # Evolution tracking
+    strength_history: List[Tuple[int, float]] = field(default_factory=list)
+    threshold_history: List[Tuple[int, float]] = field(default_factory=list)
+
+    # Relationships
+    prerequisite_circuits: Set[str] = field(default_factory=set)
+    enables_circuits: Set[str] = field(default_factory=set)
+    competes_with: Set[str] = field(default_factory=set)
+    cooperates_with: Set[str] = field(default_factory=set)
+
+    # Validation results
+    manipulation_effects: Dict[str, float] = field(default_factory=dict)
+    cross_method_consistency: Dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for serialization"""
+        return {
+            "first_detected": self.first_detected,
+            "last_seen": self.last_seen,
+            "detection_epochs": self.detection_epochs,
+            "emergence_phase": self.emergence_phase.value,
+            "stability": self.stability.value,
+            "detection_method": self.detection_method,
+            "detection_threshold": self.detection_threshold,
+            "detection_confidence": self.detection_confidence,
+            "content_aware": self.content_aware,
+            "stability_score": self.stability_score,
+            "false_positive_risk": self.false_positive_risk,
+            "consistency_score": self.consistency_score,
+            "behavioral_impact": self.behavioral_impact,
+            "strength_history": self.strength_history,
+            "threshold_history": self.threshold_history,
+            "prerequisite_circuits": list(self.prerequisite_circuits),
+            "enables_circuits": list(self.enables_circuits),
+            "competes_with": list(self.competes_with),
+            "cooperates_with": list(self.cooperates_with),
+            "manipulation_effects": self.manipulation_effects,
+            "cross_method_consistency": self.cross_method_consistency
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'CircuitMetadata':
+        """Create from dictionary"""
+        metadata = cls()
+        metadata.first_detected = data.get("first_detected", 0)
+        metadata.last_seen = data.get("last_seen", 0)
+        metadata.detection_epochs = data.get("detection_epochs", [])
+        metadata.emergence_phase = EmergencePhase(data.get("emergence_phase", "early"))
+        metadata.stability = CircuitStability(data.get("stability", "transient"))
+        metadata.detection_method = data.get("detection_method", "unknown")
+        metadata.detection_threshold = data.get("detection_threshold", 0.5)
+        metadata.detection_confidence = data.get("detection_confidence", 0.5)
+        metadata.content_aware = data.get("content_aware", False)
+        metadata.stability_score = data.get("stability_score", 0.0)
+        metadata.false_positive_risk = data.get("false_positive_risk", 0.5)
+        metadata.consistency_score = data.get("consistency_score", 0.0)
+        metadata.behavioral_impact = data.get("behavioral_impact", 0.0)
+        metadata.strength_history = data.get("strength_history", [])
+        metadata.threshold_history = data.get("threshold_history", [])
+        metadata.prerequisite_circuits = set(data.get("prerequisite_circuits", []))
+        metadata.enables_circuits = set(data.get("enables_circuits", []))
+        metadata.competes_with = set(data.get("competes_with", []))
+        metadata.cooperates_with = set(data.get("cooperates_with", []))
+        metadata.manipulation_effects = data.get("manipulation_effects", {})
+        metadata.cross_method_consistency = data.get("cross_method_consistency", {})
+        return metadata
+
 
 
 def save_circuits(circuits: List[Circuit], filepath: Union[str, Path]) -> None:
