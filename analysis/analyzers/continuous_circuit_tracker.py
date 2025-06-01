@@ -261,15 +261,6 @@ class ContinuousCircuitTracker:
             'connectivity_change': self.connectivity_evolution[-1] if self.connectivity_evolution else 0.0
         }
 
-
-
-
-
-
-
-
-
-
     def sample_circuits_enhanced(self, epoch, eval_loader, baseline_acc,
                                  adaptive_thresholds=None, current_accuracy=None,
                                  logger=None):
@@ -358,6 +349,125 @@ class ContinuousCircuitTracker:
         interactions.extend(competition_patterns)
 
         return interactions
+
+    # ============================================================================
+    # METHOD 1: Statistical Significance Testing for Head Correlations
+    # ============================================================================
+
+    def _test_correlation_significance(self, head1, head2, correlation, alpha=0.05):
+        """
+        Test statistical significance of correlation between two attention heads
+
+        Args:
+            head1: First head identifier
+            head2: Second head identifier
+            correlation: Computed correlation value
+            alpha: Significance level (default 0.05 for 95% confidence)
+
+        Returns:
+            float: Confidence level (0.0 to 1.0), higher means more significant
+        """
+
+        # Extract layer and head indices from head identifiers
+        try:
+            layer1_idx = int(head1.split('_')[1])
+            head1_idx = int(head1.split('_')[3])
+            layer2_idx = int(head2.split('_')[1])
+            head2_idx = int(head2.split('_')[3])
+        except:
+            return 0.0  # Invalid head identifiers
+
+        # Get attention patterns for both heads
+        if (layer1_idx >= len(self.model.layers) or
+                layer2_idx >= len(self.model.layers)):
+            return 0.0
+
+        layer1 = self.model.layers[layer1_idx]
+        layer2 = self.model.layers[layer2_idx]
+
+        # Check if attention weights are available
+        if (not hasattr(layer1, 'attention_weights') or layer1.attention_weights is None or
+                not hasattr(layer2, 'attention_weights') or layer2.attention_weights is None):
+            return 0.0
+
+        # Extract attention patterns
+        try:
+            pattern1 = layer1.attention_weights[0, head1_idx].detach().cpu().numpy().flatten()
+            pattern2 = layer2.attention_weights[0, head2_idx].detach().cpu().numpy().flatten()
+
+            # Ensure same length
+            min_len = min(len(pattern1), len(pattern2))
+            pattern1 = pattern1[:min_len]
+            pattern2 = pattern2[:min_len]
+
+            if min_len < 3:  # Need at least 3 points for meaningful correlation
+                return 0.0
+
+            # Perform Pearson correlation test with significance
+            from scipy.stats import stats
+            correlation_coef, p_value = stats.pearsonr(pattern1, pattern2)
+
+            # Convert p-value to confidence level
+            confidence = 1.0 - p_value
+
+            # Additional checks for robustness
+
+            # 1. Spearman correlation for non-linear relationships
+            spearman_coef, spearman_p = stats.spearmanr(pattern1, pattern2)
+            spearman_confidence = 1.0 - spearman_p
+
+            # 2. Bootstrap confidence interval for correlation
+            bootstrap_confidence = self._bootstrap_correlation_confidence(pattern1, pattern2)
+
+            # Combined confidence score (weighted average)
+            combined_confidence = (
+                    0.5 * confidence +  # Pearson significance
+                    0.3 * spearman_confidence +  # Spearman significance
+                    0.2 * bootstrap_confidence  # Bootstrap robustness
+            )
+
+            return min(1.0, combined_confidence)
+
+        except Exception as e:
+            return 0.0
+
+    def _bootstrap_correlation_confidence(self, pattern1, pattern2, n_bootstrap=100):
+        """Bootstrap sampling to estimate correlation confidence"""
+
+        if len(pattern1) != len(pattern2) or len(pattern1) < 5:
+            return 0.0
+
+        correlations = []
+        n_samples = len(pattern1)
+
+        for _ in range(n_bootstrap):
+            # Bootstrap sampling with replacement
+            indices = np.random.choice(n_samples, size=n_samples, replace=True)
+
+            sample1 = pattern1[indices]
+            sample2 = pattern2[indices]
+
+            try:
+                corr = np.corrcoef(sample1, sample2)[0, 1]
+                if not np.isnan(corr):
+                    correlations.append(abs(corr))
+            except:
+                continue
+
+        if not correlations:
+            return 0.0
+
+        # Calculate confidence from bootstrap distribution
+        correlations = np.array(correlations)
+
+        # Confidence based on consistency of correlation across bootstrap samples
+        mean_corr = np.mean(correlations)
+        std_corr = np.std(correlations)
+
+        # Higher confidence if correlation is consistently high across samples
+        confidence = mean_corr * (1.0 - min(1.0, std_corr / (mean_corr + 1e-8)))
+
+        return min(1.0, confidence)
 
     def _validate_component_stability(self, interactions, registry, epoch):
         """Validate component interactions using registry temporal features"""
@@ -473,6 +583,109 @@ class ContinuousCircuitTracker:
 
         return correlations
 
+    # ============================================================================
+    # METHOD 2: Head-MLP Correlation Analysis
+    # ============================================================================
+
+    def _correlate_head_mlp(self, head_pattern, mlp_activations):
+        """
+        Correlate attention head pattern with MLP layer activations
+
+        Args:
+            head_pattern: Attention pattern from head [seq_len, seq_len]
+            mlp_activations: MLP activations [batch_size, seq_len, hidden_dim]
+
+        Returns:
+            float: Correlation strength between head attention and MLP activations
+        """
+
+        try:
+            # Flatten head pattern to get attention distribution
+            head_flat = head_pattern.flatten()
+
+            # Process MLP activations
+            if len(mlp_activations.shape) == 3:
+                # Average over batch and sum over hidden dimensions to get seq_len vector
+                mlp_summary = np.mean(np.sum(mlp_activations, axis=2), axis=0)  # [seq_len]
+
+                # Tile to match head pattern dimensions if needed
+                seq_len = int(np.sqrt(len(head_flat)))
+                if len(mlp_summary) == seq_len:
+                    # Create a matrix by outer product to match head pattern shape
+                    mlp_expanded = np.outer(mlp_summary, mlp_summary).flatten()
+                else:
+                    mlp_expanded = mlp_summary
+
+            elif len(mlp_activations.shape) == 2:
+                # Already flattened
+                mlp_expanded = mlp_activations.flatten()
+            else:
+                return 0.0
+
+            # Ensure same length for correlation
+            min_len = min(len(head_flat), len(mlp_expanded))
+            head_truncated = head_flat[:min_len]
+            mlp_truncated = mlp_expanded[:min_len]
+
+            if min_len < 3:
+                return 0.0
+
+            # Calculate multiple correlation metrics
+
+            # 1. Pearson correlation
+            pearson_corr = np.corrcoef(head_truncated, mlp_truncated)[0, 1]
+            if np.isnan(pearson_corr):
+                pearson_corr = 0.0
+
+            # 2. Spearman correlation (rank-based)
+            from scipy.stats import stats
+            spearman_corr, _ = stats.spearmanr(head_truncated, mlp_truncated)
+            if np.isnan(spearman_corr):
+                spearman_corr = 0.0
+
+            # 3. Cosine similarity
+            from sklearn.metrics.pairwise import cosine_similarity
+            cosine_sim = cosine_similarity([head_truncated], [mlp_truncated])[0, 0]
+            if np.isnan(cosine_sim):
+                cosine_sim = 0.0
+
+            # 4. Mutual information approximation
+            mutual_info = self._approximate_mutual_information(head_truncated, mlp_truncated)
+
+            # Weighted combination of correlation metrics
+            combined_correlation = (
+                    0.4 * abs(pearson_corr) +  # Linear correlation
+                    0.3 * abs(spearman_corr) +  # Rank correlation
+                    0.2 * abs(cosine_sim) +  # Directional similarity
+                    0.1 * mutual_info  # Nonlinear dependency
+            )
+
+            return min(1.0, combined_correlation)
+
+        except Exception as e:
+            return 0.0
+
+    def _approximate_mutual_information(self, x, y, bins=10):
+        """Approximate mutual information between two variables"""
+
+        try:
+            # Discretize continuous variables
+            x_binned = np.digitize(x, np.linspace(np.min(x), np.max(x), bins))
+            y_binned = np.digitize(y, np.linspace(np.min(y), np.max(y), bins))
+
+            # Calculate mutual information
+            from sklearn.metrics import mutual_info_score
+            mi = mutual_info_score(x_binned, y_binned)
+
+            # Normalize by max possible MI
+            max_mi = min(np.log(bins), np.log(len(np.unique(x_binned))), np.log(len(np.unique(y_binned))))
+            normalized_mi = mi / max(max_mi, 1e-8)
+
+            return normalized_mi
+
+        except:
+            return 0.0
+
     def _detect_resource_competition(self, threshold):
         """Detect competition between components for same resources"""
 
@@ -492,6 +705,200 @@ class ContinuousCircuitTracker:
                 competition_patterns.extend(competition_groups)
 
         return competition_patterns
+
+    # ============================================================================
+    # METHOD 3: Competition Group Detection
+    # ============================================================================
+
+    def _find_competition_groups(self, attention_weights, threshold, layer_idx):
+        """
+        Find groups of attention heads competing for same targets
+
+        Args:
+            attention_weights: Attention weights [num_heads, seq_len, seq_len]
+            threshold: Minimum strength threshold for competition
+            layer_idx: Layer index for head identification
+
+        Returns:
+            List of competition patterns with metadata
+        """
+
+        competition_patterns = []
+
+        try:
+            num_heads, seq_len, _ = attention_weights.shape
+
+            # For each position, find heads that attend strongly to the same targets
+            for query_pos in range(seq_len):
+                # Get attention distributions for all heads at this query position
+                query_attentions = attention_weights[:, query_pos, :]  # [num_heads, seq_len]
+
+                # Find positions with high attention across multiple heads
+                for key_pos in range(seq_len):
+                    if key_pos == query_pos:
+                        continue  # Skip self-attention
+
+                    # Get attention strengths from all heads to this key position
+                    key_attentions = query_attentions[:, key_pos]  # [num_heads]
+
+                    # Find heads with strong attention to this position
+                    strong_heads = []
+                    for head_idx in range(num_heads):
+                        if key_attentions[head_idx] > threshold:
+                            strong_heads.append(head_idx)
+
+                    # If multiple heads attend strongly to same position, they compete
+                    if len(strong_heads) >= 2:
+                        # Calculate competition intensity
+                        competition_intensity = self._calculate_competition_intensity(
+                            key_attentions[strong_heads], strong_heads
+                        )
+
+                        if competition_intensity > 0.3:  # Minimum competition threshold
+                            competition_pattern = {
+                                "type": "resource_competition",
+                                "components": [f"layer_{layer_idx}_head_{h}" for h in strong_heads],
+                                "strength": competition_intensity,
+                                "competition_target": {"query_pos": query_pos, "key_pos": key_pos},
+                                "attention_strengths": key_attentions[strong_heads].tolist(),
+                                "num_competing_heads": len(strong_heads)
+                            }
+                            competition_patterns.append(competition_pattern)
+
+            # Deduplicate and merge similar competition patterns
+            merged_patterns = self._merge_competition_patterns(competition_patterns)
+
+            return merged_patterns
+
+        except Exception as e:
+            print(f"Error in competition detection: {e}")
+            return []
+
+    def _calculate_competition_intensity(self, attention_strengths, head_indices):
+        """Calculate intensity of competition between heads"""
+
+        try:
+            # Competition is stronger when:
+            # 1. Multiple heads have high attention
+            # 2. Attention strengths are similar (balanced competition)
+            # 3. Total attention is high
+
+            num_heads = len(attention_strengths)
+            if num_heads < 2:
+                return 0.0
+
+            # Factor 1: Number of competing heads (more = higher competition)
+            head_factor = min(1.0, num_heads / 4.0)  # Saturate at 4 heads
+
+            # Factor 2: Similarity of attention strengths (balanced competition)
+            attention_std = np.std(attention_strengths)
+            attention_mean = np.mean(attention_strengths)
+            if attention_mean > 0:
+                similarity_factor = 1.0 - min(1.0, attention_std / attention_mean)
+            else:
+                similarity_factor = 0.0
+
+            # Factor 3: Overall attention strength
+            strength_factor = min(1.0, attention_mean)
+
+            # Combined competition intensity
+            competition_intensity = (
+                    0.4 * head_factor +  # Multiple heads competing
+                    0.4 * similarity_factor +  # Balanced competition
+                    0.2 * strength_factor  # Strong overall attention
+            )
+
+            return competition_intensity
+
+        except:
+            return 0.0
+
+    def _merge_competition_patterns(self, patterns):
+        """Merge similar competition patterns to avoid duplicates"""
+
+        if not patterns:
+            return []
+
+        merged = []
+        used_indices = set()
+
+        for i, pattern1 in enumerate(patterns):
+            if i in used_indices:
+                continue
+
+            # Find similar patterns to merge
+            similar_patterns = [pattern1]
+            used_indices.add(i)
+
+            for j, pattern2 in enumerate(patterns[i + 1:], i + 1):
+                if j in used_indices:
+                    continue
+
+                # Check if patterns are similar (same target position, overlapping heads)
+                if self._are_competition_patterns_similar(pattern1, pattern2):
+                    similar_patterns.append(pattern2)
+                    used_indices.add(j)
+
+            # Merge similar patterns
+            if len(similar_patterns) > 1:
+                merged_pattern = self._merge_similar_competition_patterns(similar_patterns)
+                merged.append(merged_pattern)
+            else:
+                merged.append(pattern1)
+
+        return merged
+
+    def _are_competition_patterns_similar(self, pattern1, pattern2):
+        """Check if two competition patterns are similar enough to merge"""
+
+        try:
+            # Same target position
+            target1 = pattern1.get("competition_target", {})
+            target2 = pattern2.get("competition_target", {})
+
+            if (target1.get("query_pos") != target2.get("query_pos") or
+                    target1.get("key_pos") != target2.get("key_pos")):
+                return False
+
+            # Overlapping heads
+            heads1 = set(pattern1.get("components", []))
+            heads2 = set(pattern2.get("components", []))
+
+            overlap = len(heads1.intersection(heads2))
+            total_unique = len(heads1.union(heads2))
+
+            # Similar if >50% overlap
+            return overlap / max(total_unique, 1) > 0.5
+
+        except:
+            return False
+
+    def _merge_similar_competition_patterns(self, patterns):
+        """Merge multiple similar competition patterns into one"""
+
+        try:
+            # Combine all components
+            all_components = set()
+            total_strength = 0.0
+            all_attention_strengths = []
+
+            for pattern in patterns:
+                all_components.update(pattern.get("components", []))
+                total_strength += pattern.get("strength", 0.0)
+                all_attention_strengths.extend(pattern.get("attention_strengths", []))
+
+            # Use first pattern as template
+            merged = patterns[0].copy()
+            merged["components"] = list(all_components)
+            merged["strength"] = total_strength / len(patterns)  # Average strength
+            merged["attention_strengths"] = all_attention_strengths
+            merged["num_competing_heads"] = len(all_components)
+            merged["merged_from"] = len(patterns)
+
+            return merged
+
+        except:
+            return patterns[0] if patterns else {}
 
     def _detect_multi_head_cooperation(self, threshold):
         """Detect cooperative attention patterns between multiple heads"""
@@ -516,6 +923,218 @@ class ContinuousCircuitTracker:
                     cooperation_patterns.extend(cooperation_groups)
 
         return cooperation_patterns
+
+    # ============================================================================
+    # METHOD 4: Cooperation Group Detection
+    # ============================================================================
+
+    def _find_cooperation_groups(self, head_attentions, threshold, layer_idx, query_pos):
+        """
+        Find groups of attention heads with complementary (cooperative) patterns
+
+        Args:
+            head_attentions: Attention weights for all heads at query position [num_heads, seq_len]
+            threshold: Minimum threshold for cooperation detection
+            layer_idx: Layer index for head identification
+            query_pos: Query position being analyzed
+
+        Returns:
+            List of cooperation patterns
+        """
+
+        cooperation_patterns = []
+
+        try:
+            num_heads, seq_len = head_attentions.shape
+
+            # Find heads with complementary attention patterns
+            for head_i in range(num_heads):
+                for head_j in range(head_i + 1, num_heads):
+
+                    pattern_i = head_attentions[head_i]
+                    pattern_j = head_attentions[head_j]
+
+                    # Calculate cooperation score
+                    cooperation_score = self._calculate_cooperation_score(
+                        pattern_i, pattern_j, threshold
+                    )
+
+                    if cooperation_score > threshold:
+                        # Analyze cooperation type
+                        cooperation_type = self._classify_cooperation_type(pattern_i, pattern_j)
+
+                        cooperation_pattern = {
+                            "type": "multi_head_cooperation",
+                            "components": [
+                                f"layer_{layer_idx}_head_{head_i}",
+                                f"layer_{layer_idx}_head_{head_j}"
+                            ],
+                            "strength": cooperation_score,
+                            "cooperation_type": cooperation_type,
+                            "query_position": query_pos,
+                            "pattern_analysis": self._analyze_cooperation_patterns(pattern_i, pattern_j)
+                        }
+
+                        cooperation_patterns.append(cooperation_pattern)
+
+            # Look for larger cooperation groups (3+ heads)
+            larger_groups = self._find_larger_cooperation_groups(
+                head_attentions, threshold, layer_idx, query_pos
+            )
+            cooperation_patterns.extend(larger_groups)
+
+            return cooperation_patterns
+
+        except Exception as e:
+            print(f"Error in cooperation detection: {e}")
+            return []
+
+    def _calculate_cooperation_score(self, pattern_i, pattern_j, threshold):
+        """Calculate cooperation score between two attention patterns"""
+
+        try:
+            # Cooperation metrics:
+
+            # 1. Complementarity: Heads attend to different positions
+            overlap = np.sum(np.minimum(pattern_i, pattern_j))
+            total_attention = np.sum(np.maximum(pattern_i, pattern_j))
+            complementarity = 1.0 - (overlap / max(total_attention, 1e-8))
+
+            # 2. Coverage: Together they cover more positions than individually
+            individual_coverage_i = np.sum(pattern_i > threshold)
+            individual_coverage_j = np.sum(pattern_j > threshold)
+            combined_coverage = np.sum(np.maximum(pattern_i, pattern_j) > threshold)
+
+            max_individual = max(individual_coverage_i, individual_coverage_j)
+            coverage_boost = (combined_coverage - max_individual) / max(max_individual, 1)
+            coverage_boost = max(0.0, coverage_boost)
+
+            # 3. Balance: Both heads contribute meaningfully
+            strength_i = np.max(pattern_i)
+            strength_j = np.max(pattern_j)
+            balance = 1.0 - abs(strength_i - strength_j) / max(strength_i + strength_j, 1e-8)
+
+            # 4. Specialization: Each head has distinct peak positions
+            peak_i = np.argmax(pattern_i)
+            peak_j = np.argmax(pattern_j)
+            specialization = 1.0 if peak_i != peak_j else 0.5
+
+            # Combined cooperation score
+            cooperation_score = (
+                    0.3 * complementarity +  # Different targets
+                    0.3 * coverage_boost +  # Better coverage together
+                    0.2 * balance +  # Both contribute
+                    0.2 * specialization  # Distinct specializations
+            )
+
+            return min(1.0, cooperation_score)
+
+        except:
+            return 0.0
+
+    def _classify_cooperation_type(self, pattern_i, pattern_j):
+        """Classify the type of cooperation between attention patterns"""
+
+        try:
+            # Get peak positions
+            peak_i = np.argmax(pattern_i)
+            peak_j = np.argmax(pattern_j)
+
+            # Calculate pattern characteristics
+            entropy_i = -np.sum(pattern_i * np.log(pattern_i + 1e-10))
+            entropy_j = -np.sum(pattern_j * np.log(pattern_j + 1e-10))
+
+            # Classify cooperation type
+            if abs(peak_i - peak_j) == 1:
+                return "sequential"  # Adjacent positions
+            elif abs(peak_i - peak_j) > len(pattern_i) // 2:
+                return "distant"  # Far apart positions
+            elif entropy_i > 2.0 and entropy_j < 1.0:
+                return "broad_focused"  # One broad, one focused
+            elif entropy_i < 1.0 and entropy_j > 2.0:
+                return "focused_broad"  # One focused, one broad
+            elif entropy_i < 1.0 and entropy_j < 1.0:
+                return "dual_focused"  # Both focused on different positions
+            else:
+                return "complementary"  # General complementarity
+
+        except:
+            return "unknown"
+
+    def _analyze_cooperation_patterns(self, pattern_i, pattern_j):
+        """Analyze detailed cooperation patterns between two heads"""
+
+        try:
+            analysis = {
+                "pattern_i_entropy": float(-np.sum(pattern_i * np.log(pattern_i + 1e-10))),
+                "pattern_j_entropy": float(-np.sum(pattern_j * np.log(pattern_j + 1e-10))),
+                "pattern_i_peak": int(np.argmax(pattern_i)),
+                "pattern_j_peak": int(np.argmax(pattern_j)),
+                "pattern_i_max_strength": float(np.max(pattern_i)),
+                "pattern_j_max_strength": float(np.max(pattern_j)),
+                "overlap_score": float(np.sum(np.minimum(pattern_i, pattern_j))),
+                "coverage_union": float(np.sum(np.maximum(pattern_i, pattern_j) > 0.1))
+            }
+
+            return analysis
+
+        except:
+            return {}
+
+    def _find_larger_cooperation_groups(self, head_attentions, threshold, layer_idx, query_pos):
+        """Find cooperation groups with 3 or more heads"""
+
+        larger_groups = []
+
+        try:
+            num_heads = head_attentions.shape[0]
+
+            # Look for groups of 3 heads
+            for i in range(num_heads):
+                for j in range(i + 1, num_heads):
+                    for k in range(j + 1, num_heads):
+
+                        # Calculate pairwise cooperation scores
+                        coop_ij = self._calculate_cooperation_score(
+                            head_attentions[i], head_attentions[j], threshold
+                        )
+                        coop_ik = self._calculate_cooperation_score(
+                            head_attentions[i], head_attentions[k], threshold
+                        )
+                        coop_jk = self._calculate_cooperation_score(
+                            head_attentions[j], head_attentions[k], threshold
+                        )
+
+                        # All pairs must cooperate
+                        min_cooperation = min(coop_ij, coop_ik, coop_jk)
+                        avg_cooperation = (coop_ij + coop_ik + coop_jk) / 3.0
+
+                        if min_cooperation > threshold * 0.8 and avg_cooperation > threshold:
+                            group_pattern = {
+                                "type": "multi_head_cooperation",
+                                "components": [
+                                    f"layer_{layer_idx}_head_{i}",
+                                    f"layer_{layer_idx}_head_{j}",
+                                    f"layer_{layer_idx}_head_{k}"
+                                ],
+                                "strength": avg_cooperation,
+                                "cooperation_type": "three_way_cooperation",
+                                "query_position": query_pos,
+                                "pairwise_scores": {
+                                    "heads_0_1": coop_ij,
+                                    "heads_0_2": coop_ik,
+                                    "heads_1_2": coop_jk
+                                },
+                                "min_cooperation": min_cooperation
+                            }
+
+                            larger_groups.append(group_pattern)
+
+            return larger_groups
+
+        except Exception as e:
+            print(f"Error finding larger cooperation groups: {e}")
+            return []
 
     def _compute_enhanced_correlation(self, pattern1, pattern2):
         """Compute enhanced correlation metrics"""
@@ -919,7 +1538,7 @@ class ContinuousCircuitTracker:
         return correct / total if total > 0 else 0.0
 
     # fixme baseline_acc is unusd, in references is not filled todo remove here
-    def _create_component_circuit(self, interaction_data, epoch, baseline_acc):
+    def _create_component_circuit(self, interaction_data, epoch, baseline_acc=None):
         """Create circuit for component interactions"""
         components = interaction_data['components']  # e.g., ['layer_0_head_1', 'layer_1_head_2']
         interaction_strength = interaction_data['strength']

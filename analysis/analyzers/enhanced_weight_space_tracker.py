@@ -31,6 +31,9 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         self.logger = logger
         self.registry = registry
 
+        self.prev_state_dict = None  # For tracking parameter changes
+        self.group_velocities_history = defaultdict(list)  # For velocity tracking
+
         # Add sliding window parameters
         self.sliding_window_size = sliding_window_size  # Number of recent epochs to keep
         self.dense_sampling = dense_sampling  # Whether to sample more densely between snapshots
@@ -832,6 +835,91 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
 
         return top_changing
 
+    def analyze_mlp_subspaces_adaptive(self, layer_idx, adaptive_thresholds=None,
+                                       epoch=None, current_accuracy=None, logger=None):
+        """Enhanced MLP subspace analysis with adaptive thresholds"""
+
+        # Get adaptive thresholds for subspace detection
+        if adaptive_thresholds and epoch is not None:
+            sparsity_threshold = adaptive_thresholds.get_threshold(
+                "mlp_sparsity", epoch, 1000, current_accuracy or 0.0
+            )
+            feature_importance_threshold = adaptive_thresholds.get_threshold(
+                "feature_importance", epoch, 1000, current_accuracy or 0.0
+            )
+        else:
+            sparsity_threshold = 0.1
+            feature_importance_threshold = 0.3
+
+        layer = self.model.layers[layer_idx]
+
+        # Extract MLP weights
+        mlp_up_weights = layer.mlp[0].weight.detach().cpu().numpy()  # [hidden_dim, input_dim]
+        mlp_down_weights = layer.mlp[2].weight.detach().cpu().numpy()  # [output_dim, hidden_dim]
+
+        # Analyze sparse feature directions
+        sparse_features = self._detect_sparse_features_adaptive(
+            mlp_up_weights, mlp_down_weights, sparsity_threshold
+        )
+
+        # Track feature direction importance over time
+        feature_directions = self.track_feature_directions_evolution(
+            epoch, feature_importance_threshold
+        )
+
+        # Detect subspace circuits
+        subspace_circuits = self._detect_subspace_circuits_adaptive(
+            layer_idx, sparse_features, feature_directions, epoch
+        )
+
+        # Log subspace analysis results
+        if logger:
+            subspace_metrics = {
+                "layer": layer_idx,
+                "sparse_features": len(sparse_features),
+                "feature_directions": len(feature_directions),
+                "subspace_circuits": len(subspace_circuits),
+                "sparsity_threshold": sparsity_threshold,
+                "importance_threshold": feature_importance_threshold
+            }
+            logger.log_metrics(subspace_metrics, step=epoch or 0, category="subspace_analysis")
+
+        return {
+            "layer_idx": layer_idx,
+            "sparse_features": sparse_features,
+            "feature_directions": feature_directions,
+            "subspace_circuits": subspace_circuits,
+            "analysis_metadata": {
+                "sparsity_threshold": sparsity_threshold,
+                "importance_threshold": feature_importance_threshold,
+                "epoch": epoch
+            }
+        }
+
+
+    def track_feature_directions_evolution(self, epoch, importance_threshold):
+        """Track evolution of feature directions across training"""
+
+        if not hasattr(self, 'feature_direction_history'):
+            self.feature_direction_history = {}
+
+        current_directions = {}
+
+        # Analyze all MLP layers
+        for layer_idx in range(self.model.num_layers):
+            layer_directions = self._extract_layer_feature_directions(layer_idx, importance_threshold)
+            current_directions[layer_idx] = layer_directions
+
+        # Store in history
+        self.feature_direction_history[epoch] = current_directions
+
+        # Analyze evolution patterns
+        evolution_analysis = self._analyze_direction_evolution(epoch)
+
+        return evolution_analysis
+
+
+
     def _check_for_jumps(self, epoch, current_velocity_norm):
         """
         Improved jump detection that accounts for transformer's multi-step changes
@@ -1092,6 +1180,859 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
 
             # Create layer-specific analysis
             self._visualize_layer_changes(jump_id)
+
+    def _detect_sparse_features_adaptive(self, up_weights, down_weights, sparsity_threshold):
+        """Detect sparse feature directions in MLP with adaptive thresholds"""
+
+        sparse_features = []
+
+        # Compute feature activations (simplified)
+        hidden_dim = up_weights.shape[0]
+
+        for neuron_idx in range(hidden_dim):
+            # Analyze sparsity of this neuron's weights
+            up_neuron_weights = up_weights[neuron_idx, :]
+            down_neuron_weights = down_weights[:, neuron_idx]
+
+            # Calculate sparsity metrics
+            up_sparsity = self._calculate_sparsity(up_neuron_weights)
+            down_sparsity = self._calculate_sparsity(down_neuron_weights)
+
+            # Calculate importance score
+            importance = self._calculate_feature_importance(up_neuron_weights, down_neuron_weights)
+
+            # Detect if this is a sparse, important feature
+            if up_sparsity > sparsity_threshold and down_sparsity > sparsity_threshold and importance > 0.2:
+                sparse_features.append({
+                    "neuron_idx": neuron_idx,
+                    "up_sparsity": up_sparsity,
+                    "down_sparsity": down_sparsity,
+                    "importance": importance,
+                    "feature_direction": self._compute_feature_direction(up_neuron_weights, down_neuron_weights)
+                })
+
+        return sparse_features
+
+    def _calculate_sparsity(self, weights):
+        """Calculate sparsity of weight vector"""
+        # L1/L2 ratio (higher = more sparse)
+        l1_norm = np.sum(np.abs(weights))
+        l2_norm = np.sqrt(np.sum(weights ** 2))
+        return l1_norm / (l2_norm + 1e-8)
+
+
+    def _calculate_feature_importance(self, up_weights, down_weights):
+        """Calculate importance of feature direction"""
+        # Combine up and down importance
+        up_importance = np.linalg.norm(up_weights)
+        down_importance = np.linalg.norm(down_weights)
+        return (up_importance * down_importance) / (up_importance + down_importance + 1e-8)
+
+
+    def _compute_feature_direction(self, up_weights, down_weights):
+        """Compute unified feature direction vector"""
+        # Combine up and down weights into feature direction
+        # This is a simplified approach - could be made more sophisticated
+        up_normalized = up_weights / (np.linalg.norm(up_weights) + 1e-8)
+        down_normalized = down_weights / (np.linalg.norm(down_weights) + 1e-8)
+
+        return {
+            "input_direction": up_normalized.tolist(),
+            "output_direction": down_normalized.tolist(),
+            "magnitude": np.linalg.norm(up_weights) * np.linalg.norm(down_weights)
+        }
+
+
+    def track_feature_directions_evolution(self, epoch, importance_threshold):
+        """Track evolution of feature directions across training"""
+
+        if not hasattr(self, 'feature_direction_history'):
+            self.feature_direction_history = {}
+
+        current_directions = {}
+
+        # Analyze all MLP layers
+        for layer_idx in range(self.model.num_layers):
+            layer_directions = self._extract_layer_feature_directions(layer_idx, importance_threshold)
+            current_directions[layer_idx] = layer_directions
+
+        # Store in history
+        self.feature_direction_history[epoch] = current_directions
+
+        # Analyze evolution patterns
+        evolution_analysis = self._analyze_direction_evolution(epoch)
+
+        return evolution_analysis
+
+
+    def _extract_layer_feature_directions(self, layer_idx, importance_threshold):
+        """Extract important feature directions from a specific layer"""
+
+        layer = self.model.layers[layer_idx]
+
+        # Get MLP weights
+        mlp_up_weights = layer.mlp[0].weight.detach().cpu().numpy()
+        mlp_down_weights = layer.mlp[2].weight.detach().cpu().numpy()
+
+        directions = []
+        hidden_dim = mlp_up_weights.shape[0]
+
+        for neuron_idx in range(hidden_dim):
+            up_weights = mlp_up_weights[neuron_idx, :]
+            down_weights = mlp_down_weights[:, neuron_idx]
+
+            importance = self._calculate_feature_importance(up_weights, down_weights)
+
+            if importance > importance_threshold:
+                direction = {
+                    "neuron_idx": neuron_idx,
+                    "importance": importance,
+                    "direction_vector": self._compute_feature_direction(up_weights, down_weights),
+                    "activation_pattern": self._analyze_activation_pattern(layer, neuron_idx)
+                }
+                directions.append(direction)
+
+        return directions
+
+    def _analyze_activation_pattern(self, layer, neuron_idx):
+        """
+        Analyze activation pattern of a specific neuron in MLP layer
+
+        Args:
+            layer: The MLP layer object
+            neuron_idx: Index of the neuron to analyze
+
+        Returns:
+            dict: Analysis of neuron's activation pattern
+        """
+        try:
+            # Get MLP activations if available
+            if hasattr(layer, 'mlp_activations') and layer.mlp_activations is not None:
+                # Extract activations for this specific neuron
+                neuron_activations = layer.mlp_activations[:, :, neuron_idx]  # [batch, seq, neuron]
+
+                # Calculate activation statistics
+                activation_mean = torch.mean(neuron_activations).item()
+                activation_std = torch.std(neuron_activations).item()
+                activation_max = torch.max(neuron_activations).item()
+                activation_min = torch.min(neuron_activations).item()
+
+                # Calculate sparsity (fraction of near-zero activations)
+                threshold = 0.01 * activation_max if activation_max > 0 else 0.01
+                sparsity = torch.mean((torch.abs(neuron_activations) < threshold).float()).item()
+
+                # Calculate activation distribution properties
+                activations_flat = neuron_activations.flatten()
+
+                # Kurtosis approximation (measure of tail heaviness)
+                centered = activations_flat - activation_mean
+                if activation_std > 0:
+                    normalized = centered / activation_std
+                    kurtosis = torch.mean(normalized ** 4).item() - 3  # Excess kurtosis
+                else:
+                    kurtosis = 0.0
+
+                return {
+                    "mean": activation_mean,
+                    "std": activation_std,
+                    "max": activation_max,
+                    "min": activation_min,
+                    "sparsity": sparsity,
+                    "kurtosis": kurtosis,
+                    "active_fraction": 1.0 - sparsity,
+                    "dynamic_range": activation_max - activation_min
+                }
+            else:
+                # Fallback: analyze based on weights only
+                up_weights = layer.mlp[0].weight[neuron_idx, :].detach().cpu()
+                down_weights = layer.mlp[2].weight[:, neuron_idx].detach().cpu()
+
+                return {
+                    "mean": 0.0,
+                    "std": 0.0,
+                    "max": 0.0,
+                    "min": 0.0,
+                    "sparsity": self._calculate_sparsity(up_weights.numpy()),
+                    "kurtosis": 0.0,
+                    "active_fraction": 0.5,  # Default assumption
+                    "dynamic_range": torch.norm(up_weights).item(),
+                    "weight_based": True  # Indicate this is weight-based analysis
+                }
+
+        except Exception as e:
+            # Return default values if analysis fails
+            return {
+                "mean": 0.0, "std": 0.0, "max": 0.0, "min": 0.0,
+                "sparsity": 0.5, "kurtosis": 0.0, "active_fraction": 0.5,
+                "dynamic_range": 0.0, "error": str(e)
+            }
+
+    def _analyze_direction_evolution(self, current_epoch):
+        """Analyze how feature directions evolve over time"""
+
+        evolution_patterns = {
+            "stable_directions": [],
+            "emerging_directions": [],
+            "declining_directions": [],
+            "direction_changes": []
+        }
+
+        if len(self.feature_direction_history) < 2:
+            return evolution_patterns
+
+        # Compare with previous epochs
+        previous_epochs = sorted([e for e in self.feature_direction_history.keys() if e < current_epoch])
+        if not previous_epochs:
+            return evolution_patterns
+
+        prev_epoch = previous_epochs[-1]
+        prev_directions = self.feature_direction_history[prev_epoch]
+        curr_directions = self.feature_direction_history[current_epoch]
+
+        # Analyze direction stability and changes
+        for layer_idx in curr_directions:
+            if layer_idx in prev_directions:
+                layer_evolution = self._compare_layer_directions(
+                    prev_directions[layer_idx], curr_directions[layer_idx], layer_idx
+                )
+                evolution_patterns["stable_directions"].extend(layer_evolution["stable"])
+                evolution_patterns["emerging_directions"].extend(layer_evolution["emerging"])
+                evolution_patterns["declining_directions"].extend(layer_evolution["declining"])
+
+        return evolution_patterns
+
+    def _compare_layer_directions(self, prev_directions, curr_directions, layer_idx):
+        """
+        Compare feature directions between two epochs for a specific layer
+
+        Args:
+            prev_directions: Feature directions from previous epoch
+            curr_directions: Feature directions from current epoch
+            layer_idx: Layer index being compared
+
+        Returns:
+            dict: Classification of direction changes (stable, emerging, declining)
+        """
+        evolution = {
+            "stable": [],
+            "emerging": [],
+            "declining": [],
+            "changed": []
+        }
+
+        # Create mappings for easier comparison
+        prev_by_neuron = {d["neuron_idx"]: d for d in prev_directions}
+        curr_by_neuron = {d["neuron_idx"]: d for d in curr_directions}
+
+        all_neurons = set(prev_by_neuron.keys()) | set(curr_by_neuron.keys())
+
+        for neuron_idx in all_neurons:
+            neuron_id = f"layer_{layer_idx}_neuron_{neuron_idx}"
+
+            if neuron_idx in prev_by_neuron and neuron_idx in curr_by_neuron:
+                # Neuron exists in both epochs - check for stability
+                prev_dir = prev_by_neuron[neuron_idx]
+                curr_dir = curr_by_neuron[neuron_idx]
+
+                # Calculate direction similarity
+                prev_input_dir = np.array(prev_dir["direction_vector"]["input_direction"])
+                curr_input_dir = np.array(curr_dir["direction_vector"]["input_direction"])
+
+                # Cosine similarity
+                dot_product = np.dot(prev_input_dir, curr_input_dir)
+                norms = np.linalg.norm(prev_input_dir) * np.linalg.norm(curr_input_dir)
+                similarity = dot_product / (norms + 1e-8)
+
+                # Importance change
+                importance_change = curr_dir["importance"] - prev_dir["importance"]
+
+                # Classify the change
+                if abs(similarity) > 0.8 and abs(importance_change) < 0.1:
+                    evolution["stable"].append({
+                        "neuron_id": neuron_id,
+                        "similarity": similarity,
+                        "importance_change": importance_change,
+                        "prev_importance": prev_dir["importance"],
+                        "curr_importance": curr_dir["importance"]
+                    })
+                else:
+                    evolution["changed"].append({
+                        "neuron_id": neuron_id,
+                        "similarity": similarity,
+                        "importance_change": importance_change,
+                        "change_type": "direction" if abs(similarity) <= 0.8 else "importance"
+                    })
+
+            elif neuron_idx in curr_by_neuron:
+                # New neuron direction emerged
+                curr_dir = curr_by_neuron[neuron_idx]
+                evolution["emerging"].append({
+                    "neuron_id": neuron_id,
+                    "importance": curr_dir["importance"],
+                    "direction_magnitude": curr_dir["direction_vector"]["magnitude"]
+                })
+
+            elif neuron_idx in prev_by_neuron:
+                # Previous neuron direction declined/disappeared
+                prev_dir = prev_by_neuron[neuron_idx]
+                evolution["declining"].append({
+                    "neuron_id": neuron_id,
+                    "prev_importance": prev_dir["importance"]
+                })
+
+        return evolution
+
+    def _detect_subspace_circuits_adaptive(self, layer_idx, sparse_features, feature_directions, epoch):
+        """Detect and create subspace-level circuits"""
+
+        subspace_circuits = []
+
+        # Create circuits from sparse features
+        for feature in sparse_features:
+            if feature["importance"] > 0.4:  # High-importance features become circuits
+                circuit = self._create_subspace_circuit_from_feature(feature, layer_idx, epoch)
+                subspace_circuits.append(circuit)
+
+        # Create circuits from stable feature directions
+        for direction in feature_directions.get("stable_directions", []):
+            circuit = self._create_subspace_circuit_from_direction(direction, layer_idx, epoch)
+            subspace_circuits.append(circuit)
+
+        # Create composite circuits from feature interactions
+        interaction_circuits = self._detect_feature_interactions(
+            sparse_features, feature_directions, layer_idx, epoch
+        )
+        subspace_circuits.extend(interaction_circuits)
+
+        return subspace_circuits
+
+    def _create_subspace_circuit_from_direction(self, direction, layer_idx, epoch):
+        """
+        Create a subspace circuit from a stable feature direction
+
+        Args:
+            direction: Feature direction dictionary with metadata
+            layer_idx: Layer index
+            epoch: Current epoch
+
+        Returns:
+            Circuit: Subspace circuit representing the feature direction
+        """
+        from analysis.core.circuit_schema import Circuit, CircuitType, Element, ElementType, Connection, ConnectionType
+
+        # Generate circuit ID
+        direction_id = direction.get("neuron_idx", "unknown")
+        circuit_id = f"subspace_direction_L{layer_idx}_D{direction_id}_{epoch}"
+
+        # Create elements representing the subspace direction
+        input_subspace = Element(
+            id=f"input_direction_L{layer_idx}_D{direction_id}",
+            type=ElementType.SUBSPACE,
+            properties={
+                "layer": layer_idx,
+                "direction_type": "input",
+                "dimension": len(direction["direction_vector"]["input_direction"]),
+                "importance": direction["importance"]
+            }
+        )
+
+        output_subspace = Element(
+            id=f"output_direction_L{layer_idx}_D{direction_id}",
+            type=ElementType.SUBSPACE,
+            properties={
+                "layer": layer_idx,
+                "direction_type": "output",
+                "dimension": len(direction["direction_vector"]["output_direction"]),
+                "importance": direction["importance"]
+            }
+        )
+
+        # Processing element (the computation that transforms input to output direction)
+        processing_element = Element(
+            id=f"direction_processor_L{layer_idx}_D{direction_id}",
+            type=ElementType.MLP,
+            properties={
+                "layer": layer_idx,
+                "processor_type": "direction_transformation",
+                "neuron_idx": direction.get("neuron_idx"),
+                "activation_pattern": direction.get("activation_pattern", {})
+            }
+        )
+
+        # Create connections
+        input_connection = Connection(
+            source=input_subspace.id,
+            target=processing_element.id,
+            strength=direction["importance"],
+            type=ConnectionType.MLP,
+            properties={
+                "connection_type": "subspace_input",
+                "direction_vector": direction["direction_vector"]["input_direction"]
+            }
+        )
+
+        output_connection = Connection(
+            source=processing_element.id,
+            target=output_subspace.id,
+            strength=direction["importance"],
+            type=ConnectionType.MLP,
+            properties={
+                "connection_type": "subspace_output",
+                "direction_vector": direction["direction_vector"]["output_direction"]
+            }
+        )
+
+        # Create the circuit
+        circuit = Circuit(
+            id=circuit_id,
+            type=CircuitType.SUBSPACE,
+            elements=[input_subspace, processing_element, output_subspace],
+            connections=[input_connection, output_connection],
+            attribution=direction["importance"],
+            metadata={
+                "operation_type": "feature_direction_processing",
+                "layer": layer_idx,
+                "direction_id": direction_id,
+                "neuron_idx": direction.get("neuron_idx"),
+                "direction_vector": direction["direction_vector"],
+                "activation_pattern": direction.get("activation_pattern", {}),
+                "stability_info": {
+                    "epochs_seen": 1,  # Will be updated by registry
+                    "first_detected": epoch
+                }
+            },
+            discovered_at=epoch
+        )
+
+        return circuit
+
+    def _create_subspace_circuit_from_feature(self, feature, layer_idx, epoch):
+        """Create a subspace circuit from a sparse feature"""
+
+        from analysis.core.circuit_schema import Circuit, CircuitType, Element, ElementType, Connection, ConnectionType
+
+        # Generate circuit ID
+        circuit_id = f"subspace_feature_L{layer_idx}_N{feature['neuron_idx']}_{epoch}"
+
+        # Create elements
+        input_element = Element(
+            id=f"input_subspace_L{layer_idx}",
+            type=ElementType.SUBSPACE,
+            properties={
+                "layer": layer_idx,
+                "subspace_type": "input",
+                "dimension": len(feature["feature_direction"]["input_direction"])
+            }
+        )
+
+        neuron_element = Element(
+            id=f"neuron_L{layer_idx}_N{feature['neuron_idx']}",
+            type=ElementType.MLP,
+            properties={
+                "layer": layer_idx,
+                "neuron_idx": feature["neuron_idx"],
+                "sparsity": feature["up_sparsity"]
+            }
+        )
+
+        output_element = Element(
+            id=f"output_subspace_L{layer_idx}",
+            type=ElementType.SUBSPACE,
+            properties={
+                "layer": layer_idx,
+                "subspace_type": "output",
+                "dimension": len(feature["feature_direction"]["output_direction"])
+            }
+        )
+
+        # Create connections
+        input_connection = Connection(
+            source=input_element.id,
+            target=neuron_element.id,
+            strength=feature["importance"],
+            type=ConnectionType.MLP,
+            properties={"connection_type": "sparse_input"}
+        )
+
+        output_connection = Connection(
+            source=neuron_element.id,
+            target=output_element.id,
+            strength=feature["importance"],
+            type=ConnectionType.MLP,
+            properties={"connection_type": "sparse_output"}
+        )
+
+        # Create circuit
+        circuit = Circuit(
+            id=circuit_id,
+            type=CircuitType.SUBSPACE,
+            elements=[input_element, neuron_element, output_element],
+            connections=[input_connection, output_connection],
+            attribution=feature["importance"],
+            metadata={
+                "operation_type": "sparse_feature_processing",
+                "layer": layer_idx,
+                "neuron_idx": feature["neuron_idx"],
+                "sparsity_metrics": {
+                    "up_sparsity": feature["up_sparsity"],
+                    "down_sparsity": feature["down_sparsity"]
+                },
+                "feature_direction": feature["feature_direction"]
+            },
+            discovered_at=epoch
+        )
+
+        return circuit
+
+
+    def _detect_feature_interactions(self, sparse_features, feature_directions, layer_idx, epoch):
+        """Detect interactions between multiple features in the same layer"""
+
+        interaction_circuits = []
+
+        # Look for features that work together
+        for i, feature1 in enumerate(sparse_features):
+            for feature2 in sparse_features[i + 1:]:
+                # Calculate interaction strength
+                interaction_strength = self._calculate_feature_interaction(feature1, feature2)
+
+                if interaction_strength > 0.3:  # Significant interaction
+                    circuit = self._create_feature_interaction_circuit(
+                        feature1, feature2, interaction_strength, layer_idx, epoch
+                    )
+                    interaction_circuits.append(circuit)
+
+        return interaction_circuits
+
+    def _create_feature_interaction_circuit(self, feature1, feature2, interaction_strength, layer_idx, epoch):
+        """
+        Create a circuit representing interaction between two features
+
+        Args:
+            feature1: First feature dictionary
+            feature2: Second feature dictionary
+            interaction_strength: Strength of the interaction
+            layer_idx: Layer index
+            epoch: Current epoch
+
+        Returns:
+            Circuit: Circuit representing feature interaction
+        """
+        from analysis.core.circuit_schema import Circuit, CircuitType, Element, ElementType, Connection, ConnectionType
+
+        # Generate circuit ID
+        f1_id = feature1.get("neuron_idx", "f1")
+        f2_id = feature2.get("neuron_idx", "f2")
+        circuit_id = f"feature_interaction_L{layer_idx}_F{f1_id}_F{f2_id}_{epoch}"
+
+        # Create elements for each feature
+        feature1_element = Element(
+            id=f"feature_L{layer_idx}_N{f1_id}",
+            type=ElementType.MLP,
+            properties={
+                "layer": layer_idx,
+                "neuron_idx": f1_id,
+                "feature_importance": feature1["importance"],
+                "sparsity": feature1.get("up_sparsity", 0.0)
+            }
+        )
+
+        feature2_element = Element(
+            id=f"feature_L{layer_idx}_N{f2_id}",
+            type=ElementType.MLP,
+            properties={
+                "layer": layer_idx,
+                "neuron_idx": f2_id,
+                "feature_importance": feature2["importance"],
+                "sparsity": feature2.get("up_sparsity", 0.0)
+            }
+        )
+
+        # Create interaction element
+        interaction_element = Element(
+            id=f"interaction_L{layer_idx}_F{f1_id}_F{f2_id}",
+            type=ElementType.SUBSPACE,
+            properties={
+                "layer": layer_idx,
+                "interaction_type": "feature_combination",
+                "interaction_strength": interaction_strength,
+                "participants": [f1_id, f2_id]
+            }
+        )
+
+        # Create connections
+        f1_to_interaction = Connection(
+            source=feature1_element.id,
+            target=interaction_element.id,
+            strength=feature1["importance"],
+            type=ConnectionType.COMPOSITE,
+            properties={"connection_role": "feature_input"}
+        )
+
+        f2_to_interaction = Connection(
+            source=feature2_element.id,
+            target=interaction_element.id,
+            strength=feature2["importance"],
+            type=ConnectionType.COMPOSITE,
+            properties={"connection_role": "feature_input"}
+        )
+
+        # Determine interaction type based on direction similarity
+        dir1 = np.array(feature1["feature_direction"]["input_direction"])
+        dir2 = np.array(feature2["feature_direction"]["input_direction"])
+        cosine_sim = np.dot(dir1, dir2) / (np.linalg.norm(dir1) * np.linalg.norm(dir2) + 1e-8)
+
+        if abs(cosine_sim) < 0.1:
+            interaction_type = "complementary"  # Orthogonal directions
+        elif abs(cosine_sim) > 0.8:
+            interaction_type = "cooperative"  # Similar directions
+        else:
+            interaction_type = "competitive"  # Intermediate similarity
+
+        # Create the circuit
+        circuit = Circuit(
+            id=circuit_id,
+            type=CircuitType.SUBSPACE,
+            elements=[feature1_element, feature2_element, interaction_element],
+            connections=[f1_to_interaction, f2_to_interaction],
+            attribution=interaction_strength,
+            metadata={
+                "operation_type": "feature_interaction",
+                "layer": layer_idx,
+                "feature1_id": f1_id,
+                "feature2_id": f2_id,
+                "interaction_type": interaction_type,
+                "interaction_strength": interaction_strength,
+                "cosine_similarity": cosine_sim,
+                "feature1_importance": feature1["importance"],
+                "feature2_importance": feature2["importance"]
+            },
+            discovered_at=epoch
+        )
+
+        return circuit
+
+    def _calculate_feature_interaction(self, feature1, feature2):
+        """Calculate interaction strength between two features"""
+
+        # Get feature directions
+        dir1 = np.array(feature1["feature_direction"]["input_direction"])
+        dir2 = np.array(feature2["feature_direction"]["input_direction"])
+
+        # Calculate cosine similarity
+        dot_product = np.dot(dir1, dir2)
+        norms = np.linalg.norm(dir1) * np.linalg.norm(dir2)
+        cosine_similarity = dot_product / (norms + 1e-8)
+
+        # Interaction is strong if directions are orthogonal (complementary) or very similar (cooperative)
+        if abs(cosine_similarity) < 0.1:  # Orthogonal - complementary
+            return 0.8 * (feature1["importance"] + feature2["importance"]) / 2
+        elif abs(cosine_similarity) > 0.8:  # Parallel - cooperative
+            return 0.6 * (feature1["importance"] + feature2["importance"]) / 2
+        else:
+            return 0.0
+
+    def validate_subspace_circuits(self, circuits, eval_loader, logger=None):
+        """Validate subspace circuits through feature direction perturbation"""
+
+        validation_results = []
+
+        from analysis import CircuitType
+        for circuit in circuits:
+            if circuit.type == CircuitType.SUBSPACE:
+                # Perform feature direction validation
+                validation_result = self._validate_feature_direction_importance(circuit, eval_loader)
+                validation_results.append(validation_result)
+
+                # Log validation results
+                if logger:
+                    validation_metrics = {
+                        "circuit_id": circuit.id,
+                        "validation_accuracy": validation_result["accuracy_drop"],
+                        "importance_confirmed": validation_result["importance_confirmed"]
+                    }
+                    logger.log_metrics(validation_metrics, category="subspace_validation")
+
+        return validation_results
+
+
+    def _validate_feature_direction_importance(self, circuit, eval_loader):
+        """Validate importance of feature direction through perturbation"""
+
+        # Get baseline performance
+        baseline_accuracy = self._evaluate_model(eval_loader)
+
+        # Extract circuit information
+        layer_idx = circuit.metadata["layer"]
+        neuron_idx = circuit.metadata.get("neuron_idx")
+
+        if neuron_idx is not None:
+            # Perturb specific neuron
+            accuracy_after_perturbation = self._evaluate_with_neuron_perturbation(
+                eval_loader, layer_idx, neuron_idx
+            )
+        else:
+            # Perturb subspace direction
+            accuracy_after_perturbation = self._evaluate_with_direction_perturbation(
+                eval_loader, circuit
+            )
+
+        accuracy_drop = baseline_accuracy - accuracy_after_perturbation
+
+        return {
+            "circuit_id": circuit.id,
+            "baseline_accuracy": baseline_accuracy,
+            "perturbed_accuracy": accuracy_after_perturbation,
+            "accuracy_drop": accuracy_drop,
+            "importance_confirmed": accuracy_drop > 0.01  # 1% drop indicates importance
+        }
+
+    def _evaluate_with_direction_perturbation(self, eval_loader, circuit):
+        """
+        Evaluate model with feature direction perturbed
+
+        Args:
+            eval_loader: DataLoader for evaluation
+            circuit: Subspace circuit to perturb
+
+        Returns:
+            float: Accuracy with direction perturbed
+        """
+        # Extract circuit information
+        layer_idx = circuit.metadata["layer"]
+        neuron_idx = circuit.metadata.get("neuron_idx")
+
+        if neuron_idx is not None:
+            # If we have a specific neuron, perturb it
+            return self._evaluate_with_neuron_perturbation(eval_loader, layer_idx, neuron_idx)
+        else:
+            # General direction perturbation - perturb multiple neurons in the direction
+            layer = self.model.layers[layer_idx]
+
+            # Get direction vector from circuit metadata
+            direction_info = circuit.metadata.get("direction_vector", {})
+            input_direction = direction_info.get("input_direction", [])
+
+            if not input_direction:
+                # Fallback to neuron perturbation if no direction available
+                return self._evaluate_model(eval_loader, max_batches=5)
+
+            # Store original weights
+            original_up_weights = layer.mlp[0].weight.clone()
+
+            try:
+                # Perturb weights in the direction
+                direction_tensor = torch.tensor(input_direction, device=original_up_weights.device,
+                                                dtype=original_up_weights.dtype)
+
+                # Normalize direction
+                direction_tensor = direction_tensor / (torch.norm(direction_tensor) + 1e-8)
+
+                # Apply perturbation to multiple neurons weighted by direction
+                perturbation_strength = 0.1  # 10% perturbation
+                with torch.no_grad():
+                    for neuron_id in range(layer.mlp[0].weight.shape[0]):
+                        # Weight perturbation by direction alignment
+                        neuron_weights = layer.mlp[0].weight[neuron_id, :]
+                        alignment = torch.dot(neuron_weights, direction_tensor)
+
+                        if abs(alignment) > 0.1:  # Only perturb neurons aligned with direction
+                            perturbation = direction_tensor * perturbation_strength * alignment
+                            layer.mlp[0].weight[neuron_id, :] += perturbation
+
+                # Evaluate with perturbation
+                perturbed_accuracy = self._evaluate_model(eval_loader, max_batches=5)
+
+                return perturbed_accuracy
+
+            finally:
+                # Restore original weights
+                with torch.no_grad():
+                    layer.mlp[0].weight.copy_(original_up_weights)
+
+    def _evaluate_model(self, eval_loader, max_batches=10):
+        """
+        Evaluate model accuracy on evaluation data
+
+        Args:
+            eval_loader: DataLoader for evaluation
+            max_batches: Maximum number of batches to evaluate (for speed)
+
+        Returns:
+            float: Accuracy score
+        """
+        if hasattr(self.model, 'evaluate'):
+            # Use model's built-in evaluate method
+            accuracy, _ = self.model.evaluate(eval_loader)
+            return accuracy
+        else:
+            # Manual evaluation implementation
+            self.model.eval()
+            correct = 0
+            total = 0
+
+            with torch.no_grad():
+                for batch_idx, (inputs, targets) in enumerate(eval_loader):
+                    if batch_idx >= max_batches:
+                        break
+
+                    # Move to device
+                    device = next(self.model.parameters()).device
+                    inputs = inputs.to(device)
+                    targets = targets.to(device)
+
+                    # Forward pass
+                    outputs = self.model(inputs)
+
+                    # Calculate accuracy
+                    predicted = outputs.argmax(dim=-1)
+                    correct += (predicted == targets).sum().item()
+                    total += targets.size(0)
+
+            return correct / total if total > 0 else 0.0
+
+    def _evaluate_with_neuron_perturbation(self, eval_loader, layer_idx, neuron_idx, perturbation_scale=0.0):
+        """
+        Evaluate model with specific neuron perturbed/zeroed
+
+        Args:
+            eval_loader: DataLoader for evaluation
+            layer_idx: Index of layer containing the neuron
+            neuron_idx: Index of neuron to perturb
+            perturbation_scale: Scale of perturbation (0.0 = zero out)
+
+        Returns:
+            float: Accuracy with neuron perturbed
+        """
+        # Store original weights
+        layer = self.model.layers[layer_idx]
+        original_up_weights = layer.mlp[0].weight[neuron_idx, :].clone()
+        original_down_weights = layer.mlp[2].weight[:, neuron_idx].clone()
+
+        try:
+            # Apply perturbation
+            with torch.no_grad():
+                if perturbation_scale == 0.0:
+                    # Zero out the neuron
+                    layer.mlp[0].weight[neuron_idx, :] = 0
+                    layer.mlp[2].weight[:, neuron_idx] = 0
+                else:
+                    # Add noise perturbation
+                    noise_up = torch.randn_like(original_up_weights) * perturbation_scale
+                    noise_down = torch.randn_like(original_down_weights) * perturbation_scale
+                    layer.mlp[0].weight[neuron_idx, :] += noise_up
+                    layer.mlp[2].weight[:, neuron_idx] += noise_down
+
+            # Evaluate with perturbation
+            perturbed_accuracy = self._evaluate_model(eval_loader, max_batches=5)
+
+            return perturbed_accuracy
+
+        finally:
+            # Restore original weights
+            with torch.no_grad():
+                layer.mlp[0].weight[neuron_idx, :] = original_up_weights
+                layer.mlp[2].weight[:, neuron_idx] = original_down_weights
 
     def visualize_jump_characterization(self, jump_char, save_prefix=None):
         """Enhanced visualization of jump characterization with structural changes"""
