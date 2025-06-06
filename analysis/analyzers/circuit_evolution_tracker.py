@@ -117,7 +117,8 @@ class CircuitEvolutionTracker:
         self._update_circuit_relationships(epoch, active_circuit_ids)
 
         if len(active_circuit_ids) > 0:
-            print(f"\t{get_current_callable_info()}: \t{len(active_circuit_ids)} detected token circuits")
+            # print(f"\t{get_current_callable_info()}: \t{len(active_circuit_ids)} detected token circuits")
+            pass
 
         return {
             'active_circuits': len(active_circuit_ids),
@@ -202,7 +203,7 @@ class CircuitEvolutionTracker:
             avg_emergence.keys(),
             key=lambda t: avg_emergence[t]
         )
-        print(f"\t{get_current_callable_info()}:\t{get_current_callable_info()}: ")
+        # print(f"\t{get_current_callable_info()}:\t{get_current_callable_info()}: ")
 
         return {
             'circuits_by_type': circuits_by_type,
@@ -260,7 +261,7 @@ class CircuitEvolutionTracker:
         # Sort by co-occurrence strength
         co_occurrence.sort(key=lambda x: x['strength'], reverse=True)
 
-        print(f"\t{get_current_callable_info()}: \t{shorten_layer_head(co_occurrence)}")
+        # print(f"\t{get_current_callable_info()}: \t{shorten_layer_head(co_occurrence)}")
         return {
             'precedence': relationships,
             'co_occurrence': co_occurrence
@@ -907,7 +908,7 @@ class CircuitEvolutionTracker:
             self.save_figure_safe(fig=fig, filename=save_path, save_dir=self.save_dir)
             # plt.savefig(save_path, bbox_inches='tight', dpi=300)
 
-        print(f"\t{get_current_callable_info()}:\t")
+        # print(f"\t{get_current_callable_info()}:\t")
 
         return plt.gcf()
 

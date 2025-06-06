@@ -16,7 +16,7 @@ from .core import (
     Circuit, CircuitType, Element, ElementType, Connection, ConnectionType,
     CircuitRegistry, EnhancedCircuitRegistry,
     CircuitThresholds, ComputationalBudget,
-    save_circuits, load_circuits
+    save_circuits, load_circuits, DataLogger
 )
 
 # Key analyzers (most commonly used)
@@ -55,7 +55,7 @@ __all__ = [
     'ContentAwareCircuitAnalyzer',
     'analyze_tokens_adaptively',
     'calculate_circuit_interaction',
-    # 'track_circuit_stability_evolution',        # fixme warning nowhere to find
+    'track_circuit_stability_evolution',        # fixme warning nowhere to find
 
     # Validation
     'CircuitManipulationValidator',

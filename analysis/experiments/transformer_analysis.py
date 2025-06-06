@@ -19,7 +19,7 @@ from analysis.visualization.visualize_phases_anthropic_style import create_phase
 from analysis.trainers.analysis import train_with_analysis
 from analysis.trainers.train_enhanced_weight_analysis import train_with_enhanced_analysis
 from analysis.trainers.train_phase_analysis import train_with_phase_analysis, train_with_enhanced_phase_analysis
-
+from analysis.trainers.train_with_enhanced_circuit_analysis import train_with_enhanced_circuit_analysis
 
 def main(args=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -64,7 +64,6 @@ def main(args=None):
         'scheduler': args.scheduler,
         'lr': args.lr,
         'weight_decay': args.weight_decay,
-        'scheduler': args.scheduler,
         'operation': operation,
         'modulus': args.p,
         'train_ratio': args.train_ratio,
@@ -150,6 +149,18 @@ def main(args=None):
             device=device,
             checkpointManager=checkpointManager,
             dataset_split_indices=dataset_split_indices,
+        )
+    elif args.mode == 'enhanced' and args.analysis_type == 'circuit':
+        model, analysis_results = main_with_enhanced_circuit_analysis(
+            args=args,
+            model=model, train_loader=train_loader, eval_loader=eval_loader,
+            criterion=criterion, optimizer=optimizer,
+            scheduler=scheduler, device=device, checkpointManager=checkpointManager,
+            # dataset_split_indices=dataset_split_indices,
+            enable_wandb_logging=args.enable_wandb_logging,
+            enable_file_logging=args.enable_file_logging,
+            enable_screen_logging=args.enable_screen_logging,
+            log_level=args.log_level,
         )
     else:
         model = main_with_analysis(
@@ -305,7 +316,7 @@ def main_with_enhanced_weight_tracking(args, model, train_loader, eval_loader,
     return model, weight_tracker, jump_analyzer
 
 
-# In grok_transformer_analysis.py
+# In transformer_analysis.py
 def main_with_token_circuit_analysis(
         args,
         model,
@@ -335,6 +346,47 @@ def main_with_token_circuit_analysis(
         analyze_interval=args.analyze_interval,
         checkpoint_interval=args.checkpoint_interval,
         dataset_split_indices = dataset_split_indices,
+    )
+    return model, analysis_results
+
+# In transformer_analysis.py
+def main_with_enhanced_circuit_analysis(
+        args,
+        model,
+        train_loader,
+        eval_loader,
+        criterion,
+        optimizer,
+        scheduler,
+        device,
+        checkpointManager,
+        # dataset_split_indices,
+        enable_wandb_logging=True,
+        enable_file_logging=True,
+        enable_screen_logging=True,
+        log_level="INFO"
+    ):
+    from analysis.trainers.train_with_circuit_analysis import train_with_circuit_analysis
+
+
+    model, analysis_results, registry, summary = train_with_enhanced_circuit_analysis(
+        model=model, train_loader=train_loader, eval_loader=eval_loader,
+        criterion=criterion, optimizer=optimizer,
+        scheduler=scheduler, device=device, checkpointManager=checkpointManager,
+        epochs=args.epochs, log_interval=args.log_interval, analyze_interval=args.analyze_interval,
+        checkpoint_interval=args.checkpoint_interval,
+        # dataset_split_indices = dataset_split_indices,
+        enable_adaptive_detection=True,
+        enable_circuit_validation=False,
+        validation_interval=100,                        # fixme add to args
+        computational_budget_per_epoch=50.0,            # fixme add to args
+        adaptive_threshold_config=None,
+        enable_wandb_logging=args.enable_wandb_logging,
+        enable_file_logging=args.enable_file_logging,
+        enable_screen_logging=True,
+        log_level="INFO",
+        # example_sampling_strategy="diverse_tandom",     # fixme add param
+        # example_sampling_config=None,                   # fixme add param
     )
     return model, analysis_results
 
@@ -438,9 +490,9 @@ if __name__ == "__main__":
                         choices=['enhanced', 'default'],  # The three possible values
                         default='enhanced',  # Default value
                         help='Set the analysis type: enhanced [default] or standard')
-    parser.add_argument('--analysis-type',
-                        choices=['phase', 'weight', 'token', 'all'],  # The three possible values
-                        default='phase',  # Default value
+    parser.add_argument('--analysis_type',
+                        choices=['phase', 'weight', 'token', 'all', 'circuit'],  # The three possible values
+                        default=None,  # Default value
                         help='Set the analysis mode: phase [default], weight, token or all')
 
     # analysis intervals
@@ -450,6 +502,15 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_interval", type=int, default=200)
 
     parser.add_argument("--operation", type=str, default='multiply')
+
+    # info new parameters for enhanced train functions
+    # todo some link to wandb?
+    parser.add_argument('--enable_wandb', default=False, action='store_true')
+    # parser.add_argument('--wandb_project', default=None)
+    # todo file names?
+    parser.add_argument('--enable_file_logging', default=False, action='store_true')
+    parser.add_argument('--enable_screen_loggin', default=True, action='store_true')
+    parser.add_argument('--log_level', default="INFO")
 
     # Ablation studies
     parser.add_argument("--two_stage", action='store_true')  # fixme ?

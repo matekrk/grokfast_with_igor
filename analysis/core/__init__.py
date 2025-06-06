@@ -20,6 +20,9 @@ from .circuit_registry import EnhancedCircuitRegistry
 # Circuit logging
 from .circuit_logger import CircuitLogger
 
+# info Messages logging
+from .logger import DataLogger
+
 __all__ = [
     # Schema classes
     'Circuit', 'CircuitType', 'Element', 'ElementType', 'Connection', 'ConnectionType',
@@ -34,4 +37,7 @@ __all__ = [
 
     # Logging
     'CircuitLogger'
+    
+    # info messages loggin
+    'DataLogger'
 ]

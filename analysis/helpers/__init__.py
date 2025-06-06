@@ -29,6 +29,9 @@ from .content_analysis import (
     ContentAwareCircuitAnalyzer
 )
 
+from .example_sampler import ExampleSampler, create_example_sampler
+
+
 __all__ = [
     # Token helpers
     'analyze_tokens_adaptively',
@@ -47,5 +50,9 @@ __all__ = [
     'calculate_circuit_emergence_rate',
 
     # Content analysis
-    'ContentAwareCircuitAnalyzer'
+    'ContentAwareCircuitAnalyzer',
+
+    # circuit sampling
+    'ExampleSampler',
+    'create_example_sampler',
 ]

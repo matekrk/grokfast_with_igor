@@ -21,6 +21,7 @@ class ComputationalBudget:
 
         # Priority allocation for different analysis methods
         self.method_priorities = {
+            "adaptive_token_detection": 1.0,  # Highest priority
             "token_detection": 1.0,  # Highest priority
             "component_detection": 0.8,  # High priority
             "subspace_detection": 0.6,  # Medium priority
@@ -67,6 +68,7 @@ class ComputationalBudget:
             else:
                 # Default estimates based on method type
                 default_estimates = {
+                    "adaptive_token_detection": 5.0,
                     "token_detection": 5.0,
                     "component_detection": 8.0,
                     "subspace_detection": 6.0,
@@ -83,6 +85,11 @@ class ComputationalBudget:
         # Allow method if either condition is met:
         # 1. It fits in remaining total budget, OR
         # 2. It fits in method-specific budget and we haven't used much time yet
+        if not( (estimated_time <= remaining_budget or
+                (estimated_time <= method_budget and self.current_epoch_used < self.max_time_per_epoch * 0.5))):
+            pass
+            # info not enough time
+
         return (estimated_time <= remaining_budget or
                 (estimated_time <= method_budget and self.current_epoch_used < self.max_time_per_epoch * 0.5))
 

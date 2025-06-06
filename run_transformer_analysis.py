@@ -1,4 +1,4 @@
-# File: run_grok_analysis.py
+# File: run_transformer_analysis.py
 # Place this file at the root level (same level as the analysis folder)
 
 import sys
@@ -8,12 +8,12 @@ import os
 sys.path.insert(0, os.path.abspath('.'))
 
 # Import the main function from the module
-from analysis.experiments.grok_transformer_analysis import main
+from analysis.experiments.transformer_analysis import main
 
 if __name__ == "__main__":
     import argparse
 
-    # Create argument parser - copy the same parser from grok_transformer_analysis.py
+    # Create argument parser - copy the same parser from transformer_analysis.py
     parser = argparse.ArgumentParser()
     # architecture parameters
     parser.add_argument("--embedding", type=int, default=64)
@@ -34,16 +34,27 @@ if __name__ == "__main__":
     parser.add_argument("--scheduler", default=None)
     parser.add_argument("--train_ratio", type=float, default=0.5)
 
-    # parser.add_argument("--enhanced", action="store_true", help="Run enhanced analysis")
-    # parser.add_argument("--phase", action="store_true", help="Run phase transition analysis")
+    # info analysis type params
     parser.add_argument('--mode',
                         choices=['enhanced', 'default'],  # The three possible values
                         default='enhanced',  # Default value
                         help='Set the analysis type: enhanced [default] or standard')
-    parser.add_argument('--type',
-                        choices=['phase', 'weight'],  # The three possible values
-                        default='phase',  # Default value
-                        help='Set the analysis mode: phase [default] or weight')
+    parser.add_argument('--analysis_type',
+                        choices=['phase', 'weight', 'token', 'circuit'],  # The three possible values
+                        default='circuit',  # Default value
+                        help='Set the analysis type: circuit [default] or weight, phase [default] or token')
+
+    # info new parameters for enhanced train functions
+    # todo some link to wandb?
+    parser.add_argument('--enable_wandb_logging', default=False, action='store_true')
+    # parser.add_argument('--wandb_project', default=None)
+    # todo file names?
+    parser.add_argument('--enable_file_logging', default=False, action='store_true')
+    parser.add_argument('--enable_screen_logging', default=True, action='store_true')
+    parser.add_argument('--log_level', default="INFO")
+
+    # parser.add_argument("--phase", action="store_true", help="Run phase transition analysis")
+    # parser.add_argument("--enhanced", action="store_true", help="Run enhanced analysis")
 
     # analysis intervals
     parser.add_argument("--epochs", type=int, default=10000)

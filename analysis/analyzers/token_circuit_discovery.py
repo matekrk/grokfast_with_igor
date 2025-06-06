@@ -459,7 +459,7 @@ class TokenCircuitDiscovery:
             Dict with token relationship analysis
         """
         self.model.eval()
-        print(f"\t{get_current_callable_info()} @ {epoch}: \t")
+        # print(f"\t{get_current_callable_info()} @ {epoch}: \t")
         # Forward pass with attention storage
         if store_attention:
             outputs = self.model(inputs, store_attention=True)
@@ -515,7 +515,7 @@ class TokenCircuitDiscovery:
             # Store in internal tracking
             self.token_circuits[circuit.id] = circuit
 
-        print(f"\t{get_current_callable_info()} @ {epoch}:\tcreated circuits\t{shorten_layer_head(circuits)}")
+        # print(f"\t{get_current_callable_info()} @ {epoch}:\tcreated circuits\t{shorten_layer_head(circuits)}")
 
         # Return analysis results
         return {
@@ -548,7 +548,7 @@ class TokenCircuitDiscovery:
 
         # Validate batch_idx
         if batch_idx >= batch_size:
-            print(f"\t{get_current_callable_info()}: \twarning\tbatch_idx {batch_idx} >= batch_size {batch_size}, using batch_idx=0")
+            # print(f"\t{get_current_callable_info()}: \twarning\tbatch_idx {batch_idx} >= batch_size {batch_size}, using batch_idx=0")
             batch_idx = 0
 
         # Double-check with attention patterns if available
@@ -558,7 +558,7 @@ class TokenCircuitDiscovery:
                 if len(first_pattern.shape) == 3:  # [batch_size, seq_len, seq_len]
                     pattern_seq_len = first_pattern.shape[1]
                     if pattern_seq_len != seq_len:
-                        print(f"\t{get_current_callable_info()}: \twarning: Input seq_len {seq_len} doesn't match attention pattern seq_len {pattern_seq_len}")
+                        # print(f"\t{get_current_callable_info()}: \twarning: Input seq_len {seq_len} doesn't match attention pattern seq_len {pattern_seq_len}")
                         seq_len = pattern_seq_len  # Use the attention pattern's dimension
                 elif len(first_pattern.shape) == 2:  # [seq_len, seq_len] (single example)
                     seq_len = first_pattern.shape[0]
@@ -590,13 +590,14 @@ class TokenCircuitDiscovery:
                 token_attribution += example_pattern
                 valid_patterns += 1
             else:
-                print(f"\t{get_current_callable_info()}: \tskipping pattern {head_name}: shape {example_pattern.shape}, expected ({seq_len}, {seq_len})")
+                # print(f"\t{get_current_callable_info()}: \tskipping pattern {head_name}: shape {example_pattern.shape}, expected ({seq_len}, {seq_len})")
+                pass
 
         # Normalize by number of valid patterns
         if valid_patterns > 0:
             token_attribution = token_attribution / valid_patterns
         else:
-            print(f"\t{get_current_callable_info()}:\twarning: No valid attention patterns found")
+            # print(f"\t{get_current_callable_info()}:\twarning: No valid attention patterns found")
             return np.eye(seq_len)  # Identity matrix as fallback
 
         # Normalize rows to create probability distribution
@@ -702,7 +703,7 @@ class TokenCircuitDiscovery:
             if isinstance(first_pattern, torch.Tensor):
                 pattern_seq_len = first_pattern.shape[0]
                 if pattern_seq_len != seq_len:
-                    print(f"\t{get_current_callable_info()}: \twarning: Inferred seq_len {seq_len} doesn't match attention pattern seq_len {pattern_seq_len}")
+                    # print(f"\t{get_current_callable_info()}: \twarning: Inferred seq_len {seq_len} doesn't match attention pattern seq_len {pattern_seq_len}")
                     seq_len = pattern_seq_len  # Use the attention pattern's dimension
 
         # Initialize token attribution matrix with correct dimensions
@@ -725,7 +726,7 @@ class TokenCircuitDiscovery:
         if valid_patterns > 0:
             token_attribution = token_attribution / valid_patterns
         else:
-            print(f"\t{get_current_callable_info()}:\twarning: No valid attention patterns found for token attribution")
+            # print(f"\t{get_current_callable_info()}:\twarning: No valid attention patterns found for token attribution")
             return np.eye(seq_len)  # Return identity matrix as fallback
 
         # Normalize rows to sum to 1 (probability distribution)

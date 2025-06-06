@@ -82,7 +82,7 @@ class CircuitRegistry:
                         'improvement': circuit.attribution - existing.attribution
                     }
                 )
-                print(f"\t\t{get_current_callable_info()}: \tupgrade       \t{circuit.id}: {existing.attribution:.3f} → {circuit.attribution:.3f}")
+                # print(f"\t\t{get_current_callable_info()}: \tupgrade       \t{circuit.id}: {existing.attribution:.3f} → {circuit.attribution:.3f}")
                 self._update_existing_circuit(existing, circuit)
             else:
                 self.circuit_logger.log_circuit_event(
@@ -91,7 +91,7 @@ class CircuitRegistry:
                     circuit.discovered_at,
                     {'source': source, 'reason': 'weaker_than_existing'}
                 )
-                print(f"\t\t{get_current_callable_info()}: \tkeep stronger\t{circuit.id}")
+                # print(f"\t\t{get_current_callable_info()}: \tkeep stronger\t{circuit.id}")
         else:
             self.circuit_logger.log_circuit_event(
                 'created',
@@ -99,7 +99,7 @@ class CircuitRegistry:
                 circuit.discovered_at,
                 {'source': source}
             )
-            print(f"\t\t{get_current_callable_info()}: \tregister new \t{circuit.id}")
+            # print(f"\t\t{get_current_callable_info()}: \tregister new \t{circuit.id}")
             self.circuits[circuit.id] = circuit
             self.sources[circuit.id] = source
 
@@ -226,10 +226,10 @@ class CircuitRegistry:
                     "related_circuits": {k: list(v) for k, v in self.related_circuits.items()}
                 }, f, cls=CircuitJSONEncoder, indent=2)
 
-            print(f"\t{get_current_callable_info()}\t✅saved registry metadata to {metadata_path}")
+            # print(f"\t{get_current_callable_info()}\t✅saved registry metadata to {metadata_path}")
 
         except Exception as e:
-            print(f"⚠️ Error saving metadata with custom encoder: {e}")
+            # print(f"⚠️ Error saving metadata with custom encoder: {e}")
             # Fallback to basic JSON
             with open(metadata_path, 'w') as f:
                 json.dump({

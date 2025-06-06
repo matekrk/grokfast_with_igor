@@ -16,7 +16,6 @@ from analysis.trainers.utils import (
     evaluate, log_metrics, train_epoch, detect_grokking, process_jumps
 )
 from analysis.utils.utils import init_train_dataloader_state, get_current_callable_info, shorten_layer_head
-from gists.statistical_circuit_discovery import total_batches
 
 
 def train_with_circuit_analysis(

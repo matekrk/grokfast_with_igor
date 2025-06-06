@@ -64,7 +64,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
         all_token_results = []
 
         max_examples = 5
-        print(f"\t{get_current_callable_info()} @ {epoch}:\tprocess [analyze token relationships({len(selected_batch_indices)} batches x {max_examples} examples)]")
+        # print(f"\t{get_current_callable_info()} @ {epoch}:\tprocess [analyze token relationships({len(selected_batch_indices)} batches x {max_examples} examples)]")
 
         for batch_idx, (inputs, targets) in enumerate(eval_loader):
             if batch_idx in selected_batch_indices:
@@ -84,7 +84,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
 
         # Combine token results
         combined_token_results = self.combine_batch_results(all_token_results, epoch)
-        print(f"\t\t {len(combined_token_results['copy_mechanisms'])} copy mechanisms,\t{len(combined_token_results['induction_patterns'])} induction patterns")
+        # print(f"\t\t {len(combined_token_results['copy_mechanisms'])} copy mechanisms,\t{len(combined_token_results['induction_patterns'])} induction patterns")
 
         # Run other analyses independently (they can sample their own data)
         component_results = None
@@ -204,7 +204,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
         Returns:
             Dict with analysis results
         """
-        print(f"\t{get_current_callable_info()} @ {epoch}: \t")
+        # print(f"\t{get_current_callable_info()} @ {epoch}: \t")
 
         # Run component-level circuit tracking if available
         component_results = None
@@ -310,7 +310,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
 
             # Find circuits that emerged near this jump
             nearby_circuits = []
-            print(f"\t\t{get_current_callable_info()} @ {epoch}: \t")
+            # print(f"\t\t{get_current_callable_info()} @ {epoch}: \t")
             for circuit_id, emergence_epoch in self.evolution_tracker.emergence_epochs.items():
                 if abs(emergence_epoch - jump_epoch) <= 10:  # Within 10 epochs
                     circuit = self.registry.get_circuit(circuit_id)
@@ -351,9 +351,9 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
             }
 
             # Log insights
-            print(f"\t{get_current_callable_info()} @ {epoch}: \tjump at Epoch {jump_epoch} and Circuit Formation:")
-            print(f"\t\tircuits emerging before jump: {results[jump_epoch]['circuit_count_before']}")
-            print(f"\t\tcircuits emerging after jump: {results[jump_epoch]['circuit_count_after']}")
+            # print(f"\t{get_current_callable_info()} @ {epoch}: \tjump at Epoch {jump_epoch} and Circuit Formation:")
+            # print(f"\t\tircuits emerging before jump: {results[jump_epoch]['circuit_count_before']}")
+            # print(f"\t\tcircuits emerging after jump: {results[jump_epoch]['circuit_count_after']}")
 
             if behavior_change:
                 print(f"\t{get_current_callable_info()} @ {epoch}: \tcircuit behavior changes:")
@@ -378,7 +378,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
         """
         # Store original state
         original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
-        print(f"\t{get_current_callable_info()}: \t")
+        # print(f"\t{get_current_callable_info()}: \t")
         try:
             # Analyze behavior with pre-jump state
             self.model.load_state_dict(pre_state)
@@ -451,7 +451,7 @@ class IntegratedTokenCircuitDiscovery(TokenCircuitDiscovery):
                     'attribution': attribution,
                     'accuracy': accuracy
                 }
-        print(f"\t{get_current_callable_info()}: \t{behavior}")
+        # print(f"\t{get_current_callable_info()}: \t{behavior}")
         return behavior
 
     def analyze_circuit_cooperation(self, epoch, eval_loader):
