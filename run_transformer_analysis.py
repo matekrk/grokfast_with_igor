@@ -40,7 +40,7 @@ if __name__ == "__main__":
                         default='enhanced',  # Default value
                         help='Set the analysis type: enhanced [default] or standard')
     parser.add_argument('--analysis_type',
-                        choices=['phase', 'weight', 'token', 'circuit'],  # The three possible values
+                        choices=['phase', 'weight', 'token', 'circuit', 'canonical'],  # The three possible values
                         default='circuit',  # Default value
                         help='Set the analysis type: circuit [default] or weight, phase [default] or token')
 

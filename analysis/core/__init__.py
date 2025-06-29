@@ -20,8 +20,14 @@ from .circuit_registry import EnhancedCircuitRegistry
 # Circuit logging
 from .circuit_logger import CircuitLogger
 
+# info canonicalcircuit registry
+from .canonical_circuit_system import CanonicalCircuit, CanonicalCircuitRegistry, CanonicalRegistryAdapter
+
 # info Messages logging
 from .logger import DataLogger
+
+# info stability of circuits
+from .circuit_stability import EnhancedRegistryLifecycleManager, CircuitStabilityAnalyzer
 
 __all__ = [
     # Schema classes
@@ -35,9 +41,15 @@ __all__ = [
     # Infrastructure classes
     'CircuitThresholds', 'ComputationalBudget',
 
+    # Canonical classes
+    'CanonicalCircuit', 'CanonicalCircuitRegistry', 'CanonicalRegistryAdapter',
+
     # Logging
-    'CircuitLogger'
+    'CircuitLogger',
     
-    # info messages loggin
-    'DataLogger'
+    # info messages logging
+    'DataLogger',
+
+    # info circuit stability
+    'EnhancedRegistryLifecycleManager', 'CircuitStabilityAnalyzer',
 ]

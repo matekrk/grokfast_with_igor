@@ -351,8 +351,3 @@ class AdaptiveTokenOperationDetector(TokenOperationDetector):
 
         return emergence_data
 
-
-
-
-# info adaptive token copy mechanism analysis functions
-

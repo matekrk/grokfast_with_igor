@@ -4,17 +4,17 @@
 from typing import Dict, List, Any
 
 from analysis.core import Circuit
-from analysis.helpers.circuit_evolution import CircuitEvolutionTracker
+# from analysis.helpers.circuit_evolution import CircuitEvolutionTracker
+from analysis.core.unified_circuit_evolution_tracker import UnifiedCircuitEvolutionTracker
 
 
 
 
-
-def analyze_circuit_emergence(evolution_tracker: CircuitEvolutionTracker, current_epoch: int) -> Dict[str, Any]:
+def analyze_circuit_emergence(evolution_tracker: UnifiedCircuitEvolutionTracker, current_epoch: int) -> Dict[str, Any]:
     """Analyze circuit emergence patterns"""
 
     # Get evolution summary
-    evolution_summary = evolution_tracker.get_evolution_summary()
+    evolution_summary = evolution_tracker.get_evolution_summary(current_epoch=current_epoch)
 
     # Analyze emergence timing
     birth_events = [e for e in evolution_tracker.evolution_events if e["type"] == "birth"]

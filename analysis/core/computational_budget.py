@@ -22,6 +22,7 @@ class ComputationalBudget:
         # Priority allocation for different analysis methods
         self.method_priorities = {
             "adaptive_token_detection": 1.0,  # Highest priority
+            "canonical_token_detection": 1.0,  # Highest priority
             "token_detection": 1.0,  # Highest priority
             "component_detection": 0.8,  # High priority
             "subspace_detection": 0.6,  # Medium priority
@@ -69,6 +70,7 @@ class ComputationalBudget:
                 # Default estimates based on method type
                 default_estimates = {
                     "adaptive_token_detection": 5.0,
+                    "canonical_token_detection": 4.5,
                     "token_detection": 5.0,
                     "component_detection": 8.0,
                     "subspace_detection": 6.0,

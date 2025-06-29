@@ -4,6 +4,8 @@ from typing import Dict, Any
 import numpy as np
 import torch
 
+from analysis.core.canonical_circuit_system import CanonicalCircuitRegistry, CanonicalRegistryAdapter
+
 
 class FixedAdaptiveTokenOperationDetector:
     """Fixed version with more lenient detection and better debugging"""
@@ -39,7 +41,7 @@ class FixedAdaptiveTokenOperationDetector:
                 warmup_epochs=50,
                 min_accuracy_threshold=0.1  # ✅ FIX: Lower accuracy threshold
             )
-            print("✅ Created lenient default thresholds")
+            # print("✅ Created lenient default thresholds")
 
     def get_adaptive_threshold(self, operation_type, epoch, total_epochs, model_accuracy):
         """Get adaptive threshold with debugging"""
@@ -54,14 +56,14 @@ class FixedAdaptiveTokenOperationDetector:
             }
             threshold = static_thresholds.get(operation_type, 0.4)
 
-        print(f"🎯 Threshold for {operation_type} @ epoch {epoch}: {threshold:.3f}")
+        # print(f"🎯 Threshold for {operation_type} @ epoch {epoch}: {threshold:.3f}")
         return threshold
 
     def detect_copy_mechanisms_adaptive(self, attention_patterns, tokens=None, epoch=0,
                                         total_epochs=1000, model_accuracy=0.0, content_aware=True):
         """Fixed copy detection with more lenient criteria and debugging"""
 
-        print(f"🔍 Starting copy detection @ epoch {epoch}")
+        # print(f"🔍 Starting copy detection @ epoch {epoch}")
 
         # Get threshold
         threshold = self.get_adaptive_threshold("copy", epoch, total_epochs, model_accuracy)
@@ -74,7 +76,7 @@ class FixedAdaptiveTokenOperationDetector:
             if isinstance(pattern, torch.Tensor):
                 pattern = pattern.detach().cpu().numpy()
 
-            print(f"  Checking {head_name}: shape {pattern.shape}")
+            # print(f"  Checking {head_name}: shape {pattern.shape}")
 
             for query_pos in range(pattern.shape[0]):
                 for key_pos in range(query_pos):  # Causal attention only
@@ -127,8 +129,7 @@ class FixedAdaptiveTokenOperationDetector:
                             min_reliability = 0.1 if epoch < 100 else 0.05
                             if reliability > min_reliability:
                                 copy_mechanisms.append(copy_candidate)
-                                print(
-                                    f"    ✅ Found copy: {head_name} {key_pos}→{query_pos} strength={effective_strength:.3f}")
+                                # print(f"    ✅ Found copy: {head_name} {key_pos}→{query_pos} strength={effective_strength:.3f}")
 
         # Debug statistics
         if attention_scores_found:
@@ -136,10 +137,10 @@ class FixedAdaptiveTokenOperationDetector:
             mean_score = sum(attention_scores_found) / len(attention_scores_found)
             scores_above_threshold = sum(1 for s in attention_scores_found if s > threshold)
 
-            print(f"  📊 Checked {patterns_checked} position pairs")
-            print(f"  📊 Attention scores: max={max_score:.4f}, mean={mean_score:.4f}")
-            print(f"  📊 {scores_above_threshold} scores above threshold {threshold:.3f}")
-            print(f"  📊 Found {len(copy_mechanisms)} copy mechanisms")
+            # print(f"  📊 Checked {patterns_checked} position pairs")
+            # print(f"  📊 Attention scores: max={max_score:.4f}, mean={mean_score:.4f}")
+            # print(f"  📊 {scores_above_threshold} scores above threshold {threshold:.3f}")
+            # print(f"  📊 Found {len(copy_mechanisms)} copy mechanisms | above threshold {threshold:.3f}")
 
         return copy_mechanisms
 
@@ -365,7 +366,7 @@ class FixedAdaptiveTokenOperationDetector:
             List of induction patterns with enhanced metadata
         """
 
-        print(f"🔄 Starting induction detection @ epoch {epoch}")
+        # print(f"🔄 Starting induction detection @ epoch {epoch}")
 
         # Get adaptive threshold
         threshold = self.get_adaptive_threshold("induction", epoch, total_epochs, model_accuracy)
@@ -382,7 +383,7 @@ class FixedAdaptiveTokenOperationDetector:
             if seq_len < 4:  # Need at least [A, B, ..., A] for induction
                 continue
 
-            print(f"  Checking {head_name} for induction: shape {pattern.shape}")
+            # print(f"  Checking {head_name} for induction: shape {pattern.shape}")
 
             # Look for induction patterns: A B ... A → attend to first A to predict B
             for query_pos in range(2, seq_len):  # Start from 3rd position
@@ -435,8 +436,7 @@ class FixedAdaptiveTokenOperationDetector:
                             min_reliability = 0.05 if epoch < 100 else 0.02
                             if reliability > min_reliability:
                                 induction_patterns.append(induction_candidate)
-                                print(
-                                    f"    ✅ Found induction: {head_name} {max_attended_pos}→{next_after_attended}→{query_pos} strength={effective_strength:.3f}")
+                                # print(f"    ✅ Found induction: {head_name} {max_attended_pos}→{next_after_attended}→{query_pos} strength={effective_strength:.3f}")
 
         # Debug statistics
         if attention_scores_found:
@@ -444,10 +444,10 @@ class FixedAdaptiveTokenOperationDetector:
             mean_score = sum(attention_scores_found) / len(attention_scores_found)
             scores_above_threshold = sum(1 for s in attention_scores_found if s > threshold)
 
-            print(f"  📊 Checked {patterns_checked} induction positions")
-            print(f"  📊 Max attention: {max_score:.4f}, mean: {mean_score:.4f}")
-            print(f"  📊 {scores_above_threshold} scores above threshold {threshold:.3f}")
-            print(f"  📊 Found {len(induction_patterns)} induction patterns")
+            # print(f"  📊 Checked {patterns_checked} induction positions")
+            # print(f"  📊 Max attention: {max_score:.4f}, mean: {mean_score:.4f}")
+            # print(f"  📊 {scores_above_threshold} scores above threshold {threshold:.3f}")
+            # print(f"  📊 Found {len(induction_patterns)} induction patterns | above threshold {threshold:.3f}")
 
         return induction_patterns
 
@@ -930,4 +930,196 @@ class ModernCircuitCreator:
 
         return circuit
 
+
+class CanonicalAwareAdaptiveTokenOperationDetector:
+    """
+    Updated adaptive detector that uses canonical circuit system
+    Extends RegistrationAwareAdaptiveTokenOperationDetector
+    """
+
+    def __init__(self, model, enhanced_registry, canonical_registry=None, thresholds=None):
+        self.model = model
+        self.enhanced_registry = enhanced_registry
+        self.thresholds = thresholds
+
+        # Initialize canonical system
+        if canonical_registry is None:
+            canonical_registry = CanonicalCircuitRegistry()
+        self.canonical_registry = canonical_registry
+
+        # Create adapter for seamless integration
+        self.canonical_adapter = CanonicalRegistryAdapter(enhanced_registry, canonical_registry)
+
+        # Keep existing circuit creation logic but update registration
+        from analysis.analyzers.fixed_adaptive_token_operations import ModernCircuitCreator
+        self.circuit_creator = ModernCircuitCreator(model, enhanced_registry)
+
+        # Circuit tracking (now tracks canonical IDs)
+        self.circuit_history = {}  # canonical_id -> detection_epochs
+        self.false_positive_patterns = set()
+
+    def detect_and_register_copy_mechanisms(self, attention_patterns, tokens=None, epoch=0,
+                                            total_epochs=1000, model_accuracy=0.0,
+                                            content_aware=True, register_circuits=True):
+        """Enhanced copy detection with canonical registration"""
+
+        # Existing detection logic (unchanged)
+        copy_mechanisms = self._detect_copy_mechanisms_fixed(
+            attention_patterns, tokens, epoch, total_epochs, model_accuracy, content_aware
+        )
+
+        canonical_circuits = []
+        registration_summary = {'attempted': 0, 'succeeded': 0, 'aggregated': 0}
+
+        if register_circuits and copy_mechanisms:
+            print(f"🔧 Registering {len(copy_mechanisms)} copy circuits with canonical system...")
+
+            for mechanism in copy_mechanisms:
+                try:
+                    registration_summary['attempted'] += 1
+
+                    # Create circuit using existing logic
+                    circuit = self.circuit_creator.create_circuit_from_adaptive_detection(
+                        mechanism, tokens or [], epoch
+                    )
+
+                    # ✅ NEW: Register using canonical system
+                    canonical_id, legacy_id = self.canonical_adapter.register_circuit_detection(
+                        circuit=circuit,
+                        epoch=epoch,
+                        tokens=tokens or [],
+                        detection_confidence=mechanism.get("reliability", 0.5),
+                        detection_method="adaptive_copy",
+                        example_metadata={
+                            'attention_strength': mechanism.get('attention_strength', 0.0),
+                            'copy_type': mechanism.get('copy_type', 'unknown'),
+                            'source_pos': mechanism.get('source_pos', -1),
+                            'target_pos': mechanism.get('target_pos', -1)
+                        }
+                    )
+
+                    # Track canonical circuit
+                    canonical_circuits.append(canonical_id)
+
+                    # Update history tracking (now uses canonical IDs)
+                    if canonical_id not in self.circuit_history:
+                        self.circuit_history[canonical_id] = []
+                        registration_summary['succeeded'] += 1
+                    else:
+                        registration_summary['aggregated'] += 1
+
+                    self.circuit_history[canonical_id].append(epoch)
+
+                except Exception as e:
+                    print(f"    ⚠️ Failed to register copy circuit: {e}")
+
+        return {
+            "raw_mechanisms": copy_mechanisms,
+            "canonical_circuits": canonical_circuits,
+            "registration_summary": registration_summary,
+            "canonical_registry_summary": self.canonical_registry.get_registry_summary()
+        }
+
+    def detect_and_register_induction_patterns(self, attention_patterns, tokens=None, epoch=0,
+                                               total_epochs=1000, model_accuracy=0.0,
+                                               register_circuits=True):
+        """Enhanced induction detection with canonical registration"""
+
+        # Similar pattern to copy detection
+        induction_patterns = self._detect_induction_patterns_fixed(
+            attention_patterns, tokens, epoch, total_epochs, model_accuracy
+        )
+
+        canonical_circuits = []
+        registration_summary = {'attempted': 0, 'succeeded': 0, 'aggregated': 0}
+
+        if register_circuits and induction_patterns:
+            print(f"🔄 Registering {len(induction_patterns)} induction circuits with canonical system...")
+
+            for pattern in induction_patterns:
+                try:
+                    registration_summary['attempted'] += 1
+
+                    circuit = self.circuit_creator.create_circuit_from_adaptive_detection(
+                        pattern, tokens or [], epoch
+                    )
+
+                    canonical_id, legacy_id = self.canonical_adapter.register_circuit_detection(
+                        circuit=circuit,
+                        epoch=epoch,
+                        tokens=tokens or [],
+                        detection_confidence=pattern.get("reliability", 0.5),
+                        detection_method="adaptive_induction",
+                        example_metadata={
+                            'strength': pattern.get('strength', 0.0),
+                            'pattern_type': pattern.get('pattern_type', 'unknown'),
+                            'inducer_pos': pattern.get('inducer_pos', -1),
+                            'target_pos': pattern.get('target_pos', -1),
+                            'distance': pattern.get('distance', 0)
+                        }
+                    )
+
+                    canonical_circuits.append(canonical_id)
+
+                    if canonical_id not in self.circuit_history:
+                        self.circuit_history[canonical_id] = []
+                        registration_summary['succeeded'] += 1
+                    else:
+                        registration_summary['aggregated'] += 1
+
+                    self.circuit_history[canonical_id].append(epoch)
+
+                except Exception as e:
+                    print(f"    ⚠️ Failed to register induction circuit: {e}")
+
+        return {
+            "raw_patterns": induction_patterns,
+            "canonical_circuits": canonical_circuits,
+            "registration_summary": registration_summary
+        }
+
+    def get_canonical_circuit_stability(self, canonical_id: str) -> Dict[str, float]:
+        """Get stability metrics for canonical circuit"""
+        canonical = self.canonical_registry.get_canonical_circuit(canonical_id)
+
+        if canonical:
+            return {
+                'stability_score': canonical.stability_score,
+                'consistency_score': canonical.consistency_score,
+                'persistence_score': canonical.persistence_score,
+                'total_detections': canonical.total_detections,
+                'temporal_span': canonical.last_seen - canonical.first_seen + 1
+            }
+        return {'stability_score': 0.0, 'consistency_score': 0.0}
+
+    def prune_unstable_canonical_circuits(self, current_epoch: int, min_stability: float = 0.3):
+        """Prune based on canonical stability scores"""
+        stable_circuits = self.canonical_registry.get_stable_circuits(
+            min_stability=min_stability, min_detections=2
+        )
+
+        stable_canonical_ids = set(circuit.canonical_id for circuit in stable_circuits)
+
+        print(f"🔍 Canonical pruning @ epoch {current_epoch}: "
+              f"{len(stable_circuits)} stable circuits from {len(self.canonical_registry.canonical_circuits)} total")
+
+        return stable_canonical_ids
+
+    def _detect_copy_mechanisms_fixed(self, attention_patterns, tokens, epoch, total_epochs, model_accuracy,
+                                      content_aware):
+        """Existing copy detection logic (from FixedAdaptiveTokenOperationDetector)"""
+        # Import and use existing logic
+        from analysis.analyzers.fixed_adaptive_token_operations import FixedAdaptiveTokenOperationDetector
+        base_detector = FixedAdaptiveTokenOperationDetector(self.model, None, self.thresholds)
+        return base_detector.detect_copy_mechanisms_adaptive(
+            attention_patterns, tokens, epoch, total_epochs, model_accuracy, content_aware
+        )
+
+    def _detect_induction_patterns_fixed(self, attention_patterns, tokens, epoch, total_epochs, model_accuracy):
+        """Existing induction detection logic"""
+        from analysis.analyzers.fixed_adaptive_token_operations import FixedAdaptiveTokenOperationDetector
+        base_detector = FixedAdaptiveTokenOperationDetector(self.model, None, self.thresholds)
+        return base_detector.detect_induction_patterns_adaptive(
+            attention_patterns, tokens, epoch, total_epochs, model_accuracy
+        )
 

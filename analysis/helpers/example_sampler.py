@@ -6,6 +6,8 @@ from collections import defaultdict
 # from pathlib import Path
 import random
 
+# from analysis.sampling.diversity_enhanced_sampling import AggressiveDiversitySampler
+
 
 class ExampleSampler:
     """
@@ -396,7 +398,7 @@ class FixedExampleSampler:
 
         # Convert eval_loader to list once for random access
         self._cached_batches = list(eval_loader)
-        print(f"📦 Cached {len(self._cached_batches)} batches with total examples")
+        # print(f"📦 Cached {len(self._cached_batches)} batches with total examples")
 
         # Pattern-aware cache
         self.cached_examples = []
@@ -431,7 +433,7 @@ class FixedExampleSampler:
         random.seed(seed)
         np.random.seed(seed)
 
-        print(f"🎲 Strategy '{strategy}' @ epoch {epoch} using seed {seed}")
+        # print(f"🎲 Strategy '{strategy}' @ epoch {epoch} using seed {seed}")
 
         # Route to fixed methods
         if strategy == "random":
@@ -454,7 +456,7 @@ class FixedExampleSampler:
             signature = tuple(tokens[:3])
             example_signatures.append(signature)
 
-        print(f"    📋 Returned {len(examples)} examples: {example_signatures}")
+        # print(f"    📋 Returned {len(examples)} examples: {example_signatures}")
 
         return examples
 
@@ -605,7 +607,7 @@ class FixedExampleSampler:
                 self.diversity_cache[(batch_idx, example_idx)] = diversity_score
 
         self.cache_valid = True
-        print(f"📊 Built diversity cache with {len(self.diversity_cache)} examples")
+        # print(f"📊 Built diversity cache with {len(self.diversity_cache)} examples")
 
     def _calculate_diversity_score(self, example):
         """Calculate diversity score"""
@@ -653,6 +655,18 @@ class FixedExampleSampler:
 # 🔧 QUICK FIX: Replace ExampleSampler in your code
 # ============================================================================
 
+def create_fast_circuit_example_sampler(eval_loader, strategy_config=None):
+    """Create fixed example sampler"""
+    config = strategy_config or {'base_budget': 12,
+                                 'max_cache_size': 50,}
+
+    from analysis.sampling.fast_subset_sampler import FastCircuitSampler
+    return FastCircuitSampler(
+        eval_loader=eval_loader,
+        config=config,
+    )
+
+
 def create_fixed_example_sampler(eval_loader, strategy_config=None):
     """Create fixed example sampler"""
     config = strategy_config or {}
@@ -662,6 +676,20 @@ def create_fixed_example_sampler(eval_loader, strategy_config=None):
         base_budget=config.get("base_budget", 3),
         max_cache_size=config.get("max_cache_size", 50),
         diversity_metrics=config.get("diversity_metrics", ["entropy", "repetition", "unique_tokens"])
+    )
+
+def create_aggressive_example_sampler(eval_loader, strategy_config=None, **kwargs):
+    """info create aggressive example sampler"""
+    # config = {
+    #     **strategy_config,
+    #     'base_budget': kwargs.get('num_samples', 12)
+    # }
+    config = strategy_config or {}
+
+    from analysis.sampling.diversity_enhanced_sampling import AggressiveDiversitySampler
+    return AggressiveDiversitySampler(
+        eval_loader=eval_loader,
+        config=config,
     )
 
 # Integration helper for AdaptiveTokenOperationDetector

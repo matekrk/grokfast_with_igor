@@ -162,6 +162,50 @@ def main(args=None):
             enable_screen_logging=args.enable_screen_logging,
             log_level=args.log_level,
         )
+    elif args.mode == 'default' and args.analysis_type == 'canonical':
+        from analysis.trainers.train_with_canonical_circuits import train_with_default_canonical_circuits
+        model, analysis_results, registry, summary, evolution_tracker = train_with_default_canonical_circuits(
+            model=model, train_loader=train_loader, eval_loader=eval_loader,
+            criterion=criterion, optimizer=optimizer,
+            scheduler=scheduler, device=device, checkpointManager=checkpointManager,
+            epochs=args.epochs, log_interval=args.log_interval, analyze_interval=args.analyze_interval,
+            checkpoint_interval=args.checkpoint_interval,
+            # dataset_split_indices = dataset_split_indices,
+            enable_adaptive_detection=True,
+            enable_circuit_validation=False,
+            validation_interval=100,  # fixme add to args
+            computational_budget_per_epoch=50.0,  # fixme add to args
+            adaptive_threshold_config=None,
+            enable_wandb_logging=args.enable_wandb_logging,
+            enable_file_logging=args.enable_file_logging,
+            enable_screen_logging=True,
+            log_level="INFO",
+            # example_sampling_strategy="diverse_tandom",     # fixme add param
+            # example_sampling_config=None,                   # fixme add param
+        )
+        return model, analysis_results
+    elif args.mode == 'enhanced' and args.analysis_type == 'canonical':
+        from analysis.trainers.train_with_enhanced_canonical_circuits import train_with_enhanced_circuit_management
+        results = train_with_enhanced_circuit_management(
+            model=model, train_loader=train_loader, eval_loader=eval_loader,
+            criterion=criterion, optimizer=optimizer,
+            scheduler=None, device=device, checkpointManager=checkpointManager,
+            epochs=10000, log_interval=args.log_interval,
+            # fixme add the configs, intervals, etc, here or within the function?
+            circuit_assessment_interval=40,
+            circuit_management_config=None,
+            enable_circuit_removal=True,
+            enable_diversity_protection=True,
+            enable_real_testing=True,
+            enable_robust_detection=True,
+            robust_detection_samples=12,
+            enable_wandb_logging=args.enable_wandb_logging,
+            enable_file_logging=args.enable_file_logging, enable_screen_logging=args.enable_screen_logging,
+            log_level="INFO",
+        )
+        from analysis.examples.enhanced_circuit_canonical_circuits_management import analyze_training_results, analyze_dataframe_insights
+        analyze_training_results(results=results)
+        return results
     else:
         model = main_with_analysis(
             args=args,
@@ -369,7 +413,7 @@ def main_with_enhanced_circuit_analysis(
     from analysis.trainers.train_with_circuit_analysis import train_with_circuit_analysis
 
 
-    model, analysis_results, registry, summary = train_with_enhanced_circuit_analysis(
+    model, analysis_results, registry, summary, evolution_tracker = train_with_enhanced_circuit_analysis(
         model=model, train_loader=train_loader, eval_loader=eval_loader,
         criterion=criterion, optimizer=optimizer,
         scheduler=scheduler, device=device, checkpointManager=checkpointManager,
@@ -390,6 +434,44 @@ def main_with_enhanced_circuit_analysis(
     )
     return model, analysis_results
 
+# In transformer_analysis.py
+def main_with_canonical_circuits(
+        args,
+        model,
+        train_loader,
+        eval_loader,
+        criterion,
+        optimizer,
+        scheduler,
+        device,
+        checkpointManager,
+        # dataset_split_indices,
+        enable_wandb_logging=True,
+        enable_file_logging=True,
+        enable_screen_logging=True,
+        log_level="INFO"
+    ):
+    from analysis.trainers.train_with_canonical_circuits import train_with_default_canonical_circuits
+    model, analysis_results, registry, summary, evolution_tracker = train_with_default_canonical_circuits(
+        model=model, train_loader=train_loader, eval_loader=eval_loader,
+        criterion=criterion, optimizer=optimizer,
+        scheduler=scheduler, device=device, checkpointManager=checkpointManager,
+        epochs=args.epochs, log_interval=args.log_interval, analyze_interval=args.analyze_interval,
+        checkpoint_interval=args.checkpoint_interval,
+        # dataset_split_indices = dataset_split_indices,
+        enable_adaptive_detection=True,
+        enable_circuit_validation=False,
+        validation_interval=100,                        # fixme add to args
+        computational_budget_per_epoch=50.0,            # fixme add to args
+        adaptive_threshold_config=None,
+        enable_wandb_logging=args.enable_wandb_logging,
+        enable_file_logging=args.enable_file_logging,
+        enable_screen_logging=True,
+        log_level="INFO",
+        # example_sampling_strategy="diverse_tandom",     # fixme add param
+        # example_sampling_config=None,                   # fixme add param
+    )
+    return model, analysis_results
 
 def main_with_staged_analysis(args):
     """Run experiment with staged analysis"""

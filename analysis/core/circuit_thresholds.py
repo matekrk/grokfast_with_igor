@@ -58,7 +58,7 @@ class CircuitThresholds:
 
     def should_start_detection(self, epoch: int, model_accuracy: float) -> bool:
         """Determine if we should start circuit detection based on training state"""
-        return (epoch >= self.warmup_epochs or
+        return (epoch >= self.warmup_epochs and
                 model_accuracy >= self.min_accuracy_threshold)
 
     def get_consistency_requirement(self, circuit_type: str, epoch: int) -> int:
