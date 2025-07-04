@@ -1,16 +1,14 @@
 # token_circuit_discovery.py
-import torch
-import numpy as np
-from typing import Optional, Union
 from pathlib import Path
+from typing import Optional, Union
 
-# from analysis.core.circuit_schema import Circuit, Element, Connection, ElementType, ConnectionType, CircuitType
-from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
-from analysis.core.circuit_schema import Circuit, CircuitType, Element, ElementType, Connection, ConnectionType, \
-    save_circuits
-from analysis.utils.utils import get_current_callable_info, shorten_layer_head
+import numpy as np
+import torch
+
 from analysis.analyzers.adaptive_token_operations import AdaptiveTokenOperationDetector
-
+from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
+from analysis.core.circuit_schema import Circuit, CircuitType, Element, ElementType, Connection, ConnectionType
+from analysis.utils.utils import get_current_callable_info
 
 
 class TokenCircuitDiscovery:

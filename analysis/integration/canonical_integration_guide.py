@@ -41,7 +41,7 @@ class CanonicalAwareAdaptiveTokenOperationDetector:
         self.canonical_adapter = CanonicalRegistryAdapter(enhanced_registry, canonical_registry)
 
         # Keep existing circuit creation logic but update registration
-        from analysis.analyzers.fixed_adaptive_token_operations import ModernCircuitCreator
+        from analysis.analyzers.adaptive_token_operations import ModernCircuitCreator
         self.circuit_creator = ModernCircuitCreator(model, enhanced_registry)
 
         # Circuit tracking (now tracks canonical IDs)
@@ -193,28 +193,22 @@ class CanonicalAwareAdaptiveTokenOperationDetector:
         # print(f"🔍 Canonical pruning @ epoch {current_epoch}: "
         #       f"{len(stable_circuits)} stable circuits from {len(self.canonical_registry.canonical_circuits)} total")
 
-        if len(stable_circuits) > 0:
-            most_stable = max(stable_circuits, key=lambda x: x.stability_score)
-            least_stable = min(stable_circuits, key=lambda x: x.stability_score)
-        else:
-            least_stable = most_stable = None
-
-        return stable_canonical_ids, most_stable, least_stable
+        return stable_canonical_ids
 
     def _detect_copy_mechanisms_fixed(self, attention_patterns, tokens, epoch, total_epochs, model_accuracy,
                                       content_aware):
         """Existing copy detection logic (from FixedAdaptiveTokenOperationDetector)"""
         # Import and use existing logic
-        from analysis.analyzers.fixed_adaptive_token_operations import FixedAdaptiveTokenOperationDetector
-        base_detector = FixedAdaptiveTokenOperationDetector(self.model, None, self.thresholds)
+        from analysis.analyzers.adaptive_token_operations import AdaptiveTokenOperationDetector
+        base_detector = AdaptiveTokenOperationDetector(self.model, None, self.thresholds)
         return base_detector.detect_copy_mechanisms_adaptive(
             attention_patterns, tokens, epoch, total_epochs, model_accuracy, content_aware
         )
 
     def _detect_induction_patterns_fixed(self, attention_patterns, tokens, epoch, total_epochs, model_accuracy):
         """Existing induction detection logic"""
-        from analysis.analyzers.fixed_adaptive_token_operations import FixedAdaptiveTokenOperationDetector
-        base_detector = FixedAdaptiveTokenOperationDetector(self.model, None, self.thresholds)
+        from analysis.analyzers.adaptive_token_operations import AdaptiveTokenOperationDetector
+        base_detector = AdaptiveTokenOperationDetector(self.model, None, self.thresholds)
         return base_detector.detect_induction_patterns_adaptive(
             attention_patterns, tokens, epoch, total_epochs, model_accuracy
         )

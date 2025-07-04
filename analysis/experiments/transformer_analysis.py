@@ -10,16 +10,16 @@ from torch import optim
 # warning is this import OK?
 from analysis.models.analysis_transformer import Decoder
 from analysis.models.modular_data import create_modular_dataloaders
-from analysis.staged_experiment import staged_experiment_framework
+# from analysis.staged_experiment import staged_experiment_framework
 from analysis.utils.checkpoint_manager import GrokAwareCheckpointManager
 from analysis.utils.utils import create_model, create_optimizer, create_scheduler, find_closest_jump, \
     get_current_callable_info
 from analysis.visualization.visualize_phases_anthropic_style import create_phase_visualizations
 
 from analysis.trainers.analysis import train_with_analysis
-from analysis.trainers.train_enhanced_weight_analysis import train_with_enhanced_analysis
-from analysis.trainers.train_phase_analysis import train_with_phase_analysis, train_with_enhanced_phase_analysis
-from analysis.trainers.train_with_enhanced_circuit_analysis import train_with_enhanced_circuit_analysis
+# from analysis.trainers.train_enhanced_weight_analysis import train_with_enhanced_analysis
+# from analysis.trainers.train_phase_analysis import train_with_phase_analysis, train_with_enhanced_phase_analysis
+# from analysis.trainers.train_with_enhanced_circuit_analysis import train_with_enhanced_circuit_analysis
 
 def main(args=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

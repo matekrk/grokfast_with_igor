@@ -5,7 +5,8 @@ import pandas as pd
 
 from analysis import EnhancedCircuitRegistry, CircuitThresholds, ComputationalBudget
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
-from analysis.canonical.sampled_circuit_analysis import run_canonical_circuit_analysis_with_sampling
+from analysis.canonical.sampled_circuit_analysis import run_canonical_circuit_analysis_with_sampling, \
+    create_standard_canonical_system
 from analysis.core.canonical_circuit_system import CanonicalCircuitRegistry, FunctionalCircuitSignatureExtractor
 from analysis.core.json_safe_canonical_circuits import JSONSafeCanonicalCircuitRegistry, \
     JSONSafeCanonicalRegistryAdapter
@@ -51,71 +52,6 @@ def get_sampling_configs(eval_loader, num_samples=12):
         "exploration": exploration_config,
         "focused": focused_config,
         'aggressive': aggressive_config,
-    }
-
-
-def extend_canonical_registry_for_new_types(registry: CanonicalCircuitRegistry):
-    """Example of how to extend for new circuit types"""
-
-    # Add new extractors
-    registry.extractors.append(FunctionalCircuitSignatureExtractor())
-
-    # Could add more extractors for:
-    # - Sparse autoencoder features
-    # - Superposition circuits
-    # - Meta-learning circuits
-    # - Compositional reasoning circuits
-    # etc.
-
-    return registry
-
-
-def initialize_canonical_circuits_experimental_architecture(model, save_dir, logger,
-                                enhanced_registry=None, thresholds=None):
-    """Initialize complete canonical circuit system"""
-
-    # info create canonical registry
-    canonical_registry = JSONSafeCanonicalCircuitRegistry(save_dir / "canonical_circuits")
-    # info extend for additional circuit types if needed
-    from analysis.core.canonical_circuit_system import extend_canonical_registry_for_new_types
-    canonical_registry = extend_canonical_registry_for_new_types(canonical_registry)
-
-    # info create enhanced registry if not provided
-    if enhanced_registry is None:
-        from analysis.core import EnhancedCircuitRegistry
-        enhanced_registry = EnhancedCircuitRegistry(save_dir / "enhanced_registry")
-
-    # info create adapter
-    adapter = JSONSafeCanonicalRegistryAdapter(enhanced_registry, canonical_registry)
-
-    # info initialize evolution tracker with canonical support
-    from analysis.core.unified_circuit_evolution_tracker import UnifiedCircuitEvolutionTracker
-    evolution_tracker = UnifiedCircuitEvolutionTracker(enhanced_registry, save_dir / "evolution", logger)
-
-    # example_sampler = create_aggressive_example_sampler(eval_loader, strategy_config)
-
-    # info create canonical-aware adaptive detector with JSON safety included
-    from analysis.integration.canonical_integration_guide import CanonicalAwareAdaptiveTokenOperationDetector
-    canonical_detector = CanonicalAwareAdaptiveTokenOperationDetector(
-        model=model,
-        enhanced_registry=enhanced_registry,
-        canonical_registry=canonical_registry,
-        thresholds=thresholds,
-    )
-
-    print("✅ JSON-safe canonical circuit system initialized")
-
-    circuit_quality_analyzer = CircuitQualityAnalyzer(model=model, canonical_registry=canonical_registry,
-                                                      save_dir=save_dir)
-
-    return {
-        'canonical_registry': canonical_registry,
-        'enhanced_registry': enhanced_registry,
-        'adapter': adapter,
-        'evolution_tracker': evolution_tracker,
-        'canonical_detector': canonical_detector,
-        'example_sampler': example_sampler,
-        'quality_analyzer': circuit_quality_analyzer,
     }
 
 
@@ -182,8 +118,6 @@ def train_with_default_canonical_circuits(
                          enable_screen_logging=enable_screen_logging, log_level=log_level)
     shared_logger = model.logger if hasattr(model, 'logger') else None
 
-    # info enhanced registry with temporal tracking
-    registry = EnhancedCircuitRegistry(save_dir / "enhanced_registry")
     # info adaptive threshold system
     aggressive_thresholds = True
     if adaptive_threshold_config:
@@ -199,13 +133,17 @@ def train_with_default_canonical_circuits(
                 induction_attention_min=0.4, induction_attention_max=0.85,
                 warmup_epochs=50, min_accuracy_threshold=0.2
             ))
-    circuit_system = initialize_canonical_circuits_experimental_architecture(
-        model, save_dir, logger, enhanced_registry=registry, thresholds=thresholds)
+    # fixme how to pass a sampler config? Is it needed for PyTorch based fast_sampler?
+    # info sampling_configs
+    all_sampling_configs = get_sampling_configs(eval_loader=eval_loader, num_samples=14)
+    circuit_system = create_standard_canonical_system(model=model, save_dir=save_dir,
+                                                      logger=logger, eval_loader=eval_loader,
+                                                      thresholds=thresholds)
     canonical_registry = circuit_system['canonical_registry']
     canonical_detector = circuit_system['canonical_detector']
     evolution_tracker = circuit_system['evolution_tracker']
     example_sampler = circuit_system['example_sampler']
-    adapter = circuit_system['adapter']
+    adapter = circuit_system['adapter']     # warning no references to 'adapter' later?
     circuits_quality_analyzer = circuit_system['quality_analyzer']
 
     # fixme ##############################################################################
@@ -218,22 +156,12 @@ def train_with_default_canonical_circuits(
     # whatis other analyzers initializations fixme move to some local function
     weight_tracker = EnhancedWeightSpaceTracker(
         model=model, save_dir=save_dir / "weight_tracking",
-        logger=shared_logger, registry=registry,
+        logger=shared_logger, registry=canonical_registry,
         jump_detection_window=100, snapshot_freq=analyze_interval // 2
     )
 
     # info computational budget manager
     budget = ComputationalBudget(max_time_per_epoch=10 * computational_budget_per_epoch)
-    # info sampling_configs
-    all_sampling_configs = get_sampling_configs(eval_loader=eval_loader, num_samples=14)
-    # info create enhanced sampler
-    # sampling_config = all_sampling_configs["exploration"]
-    # example_sampler = create_fixed_example_sampler(eval_loader, sampling_config)
-
-    # info create aggressive sampler
-    aggressive_config = all_sampling_configs["aggressive"]
-    example_sampler = create_aggressive_example_sampler(eval_loader, aggressive_config)
-    logger.info(f"🎲 Example sampler initialized with strategy: {example_sampling_strategy}")
 
     # info set the log interval multiplier fixme if epoch % (log_interval_multiplier * log_interval) == 0: ...
     log_interval_mult = 2
@@ -373,26 +301,9 @@ def train_with_default_canonical_circuits(
                 #                     f"stability {evolution_data['stability_score']:.3f}, "
                 #                     f"trend {evolution_data.get('attribution_trend', {}).get('trend', 'unknown')}")
 
-                stable_canonical_ids, most_stable, least_stable = canonical_detector.prune_unstable_canonical_circuits(
+                stable_canonical_ids = canonical_detector.prune_unstable_canonical_circuits(
                     epoch, min_stability=0.3
                 )
-                # todo fixme ######################################################################################
-                # fixme ###########################################################################################
-                # todo warning prune circuits which are not true anymore warning warning fixme or are unimportant
-                # fixme ###########################################################################################
-                # todo ############################################################################################
-                # info log the most and least stable circuits # warning only stable!
-                if (len(stable_canonical_ids) > 1 and most_stable is not None and
-                        least_stable is not None and epoch % (log_interval_mult * log_interval) == 0):
-                    logger.info(f"    🧬 [{len(stable_canonical_ids)} stable]:"
-                        f"  (most) {"::".join([most_stable.canonical_id.split("_")[0], most_stable.canonical_id.split("_")[-1]])} "
-                        f" (stabil. {most_stable.stability_score:.3f}), "
-                        f" (persist. {most_stable.persistence_score:.3f}), "
-                        f" [{most_stable.first_seen}-{most_stable.last_seen}]  | "
-                        f"  (least) {"::".join([least_stable.canonical_id.split("_")[0], least_stable.canonical_id.split("_")[-1]])} "
-                        f" (stabil. {least_stable.stability_score:.3f}), "
-                        f" [{most_stable.first_seen}-{most_stable.last_seen}])"
-                        f" (persist. {least_stable.persistence_score:.3f})")
 
                 # info check the circuits quality
                 # info do it, probably, on some epoch multiplicity basis
@@ -453,7 +364,7 @@ def train_with_default_canonical_circuits(
                     # info enhanced logging with unified tracker data
                     stable_circuits = evolution_tracker.get_stable_circuits(epoch)
                     evolution_metrics = {
-                        "total_circuits": len(registry.circuits),
+                        "total_circuits": len(canonical_registry.circuits),
                         "stable_circuits": len(stable_circuits),
                         "circuit_birth_rate": stability_summary.get('birth_events', 0),
                         "circuit_death_rate": stability_summary.get('death_events', 0),
@@ -472,7 +383,7 @@ def train_with_default_canonical_circuits(
                                         f"(stability: {circuit_info['stability_score']:.3f}, "
                                         f"lifetime: {circuit_info['lifetime']} epochs)")
         if epoch % 100 == 0 and epoch > 0:
-            summary = registry.get_registry_summary()
+            summary = canonical_registry.get_registry_summary()
             try:
                 canonical_registry.save(save_dir / f"canonical_registry_epoch_{epoch}.json")
             except Exception as e:

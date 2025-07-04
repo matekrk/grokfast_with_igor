@@ -4,9 +4,8 @@ import torch
 
 from analysis.analyzers.attention_mlp_interaction_analyzer import AttentionMLPInteractionAnalyzer
 from analysis.analyzers.circuit_class_attribution import CircuitClassAttribution
-from analysis.analyzers.mlp_sparsity_tracker import MLPSparsityTracker
+from analysis.analyzers.json_safe_mlp_sparsity_tracker import JSONSafeMLPSparsityTracker
 from analysis.analyzers.phase_transition_analyzer import PhaseTransitionAnalyzer
-
 
 class EnhancedPhaseAnalyzer(PhaseTransitionAnalyzer):
     """Extends phase transition analysis with circuit and sparsity tracking"""
@@ -16,7 +15,8 @@ class EnhancedPhaseAnalyzer(PhaseTransitionAnalyzer):
         super().__init__(model, save_dir, logger, circuit_tracker, weight_tracker)
 
         # Additional analysis components
-        self.mlp_sparsity_tracker = MLPSparsityTracker(
+        from analysis.analyzers.json_safe_mlp_sparsity_tracker import JSONSafeMLPSparsityTracker
+        self.mlp_sparsity_tracker = JSONSafeMLPSparsityTracker(
             model=model,
             save_dir=save_dir / "sparsity_analysis",
             logger=logger

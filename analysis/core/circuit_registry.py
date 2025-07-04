@@ -3,22 +3,10 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Any, Set, Tuple
 from pathlib import Path
 import json
-# import time
 
-# from .circuit_schema import (
-#     CircuitMetadata, EmergencePhase, CircuitStability, RelationshipType
-# )
-
-# import numpy as np
-
-# from analysis.core import ComputationalBudget
 from analysis.core.circuit_logger import CircuitLogger
-from analysis.core.circuit_schema import Circuit, CircuitType, save_circuits, load_circuits, RelationshipType, \
-    CircuitMetadata, EmergencePhase, CircuitStability
-from analysis.utils.utils import get_current_callable_info
-# from analysis.utils.utils import CircuitJSONEncoder
-# from analysis.validation import CircuitManipulationValidator
-
+from analysis.core.circuit_schema import (Circuit, CircuitType, save_circuits, load_circuits, RelationshipType, \
+                                          CircuitMetadata, EmergencePhase, CircuitStability)
 
 class CircuitRegistry:
     """Central registry for all discovered circuits"""

@@ -13,14 +13,13 @@ from .token_helpers import (
 )
 
 # Import from circuit_evolution
-from .circuit_evolution import (
+from analysis.obsolete.circuit_evolution_helper import (
     calculate_circuit_interaction,
     create_functional_circuit,
     analyze_circuit_relationships_enhanced,
     has_prerequisite_relationship,
     has_competitive_relationship,
     calculate_circuit_emergence_rate,
-    prune_unstable_circuits,
     track_circuit_stability_evolution
 )
 

@@ -6,16 +6,17 @@ Properly separates circuit identity (computational algorithm) from instance data
 Supports evolution tracking, circuit competition analysis, and extension to new circuit types.
 """
 
-from typing import Dict, List, Set, Any, Optional, Tuple, Union
-from collections import defaultdict
 import hashlib
 import json
-import numpy as np
+from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from abc import ABC, abstractmethod
+from typing import Dict, List, Set, Any, Optional, Tuple
 
-from analysis.core.circuit_schema import Circuit, CircuitType, Element, Connection, ElementType, ConnectionType
+import numpy as np
+
+from analysis.core.circuit_schema import (Circuit, CircuitType, Element, Connection)
 
 
 # ============================================================================

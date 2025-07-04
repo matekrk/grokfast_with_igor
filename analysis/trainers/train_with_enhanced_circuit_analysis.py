@@ -171,7 +171,7 @@ def train_with_enhanced_circuit_analysis(
     # info adaptive token detector
     adaptive_detector = None
     if enable_adaptive_detection:
-        from analysis.analyzers.fixed_adaptive_token_operations import RegistrationAwareAdaptiveTokenOperationDetector # FixedAdaptiveTokenOperationDetector
+        from analysis.analyzers.adaptive_token_operations import RegistrationAwareAdaptiveTokenOperationDetector
         adaptive_detector = RegistrationAwareAdaptiveTokenOperationDetector(
             model=model, registry=registry, thresholds=thresholds
         )

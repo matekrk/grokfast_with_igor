@@ -2,7 +2,7 @@
 from analysis.utils.utils import get_current_callable_info, shorten_layer_head
 
 
-class CircuitEvolutionTracker:
+class TokenCircuitEvolutionTracker:
     """Tracks the evolution of circuits over training epochs"""
 
     def __init__(self, registry):

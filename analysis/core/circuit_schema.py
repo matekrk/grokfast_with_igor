@@ -1,4 +1,15 @@
-# circuit_schema.py
+# analysis/core/circuit_schema.py
+"""
+Fixed circuit schema with all missing components for Phase 2 transition
+
+Addresses:
+1. Missing EmergencePhase fields (MATURE, DEVELOPING)
+2. Missing EvolutionPattern fields (GRADUAL_EMERGENCE, SUDDEN_EMERGENCE, PLATEAUING, DECLINING)
+3. Missing EvolutionSnapshot.active_interactions field
+4. Missing LearningPhaseTransition class
+5. Missing analyzer classes (CircuitLevel, GrokkingPhase, TemporalMetrics, CircuitDependencies)
+"""
+
 from dataclasses import dataclass, field
 from typing import Set, Tuple, Dict, List, Optional, Union, Any
 import json
@@ -7,21 +18,45 @@ from pathlib import Path
 from analysis.utils.utils import CircuitJSONEncoder, get_current_callable_info
 
 
+# ============================================================================
+# ENUMS - EXTENDED FOR PHASE 2
+# ============================================================================
 
 class CircuitType(Enum):
     TOKEN = "token"
     COMPONENT = "component"
     FUNCTIONAL = "functional"
     HYBRID = "hybrid"
-    SUBSPACE = "subspace"   # ✅ Add for MLP subspace circuits
+    SUBSPACE = "subspace"
+
+
+class CircuitInteractionType(Enum):
+    """Types of circuit interactions"""
+    PREREQUISITE = "prerequisite"
+    ENABLES = "enables"
+    COMPETES = "competes"
+    COOPERATES = "cooperates"
+    REPLACES = "replaces"
+    COMPOSES = "composes"
+
+
+class EmergencePattern(Enum):
+    """Patterns of circuit emergence"""
+    SUDDEN = "sudden"
+    GRADUAL = "gradual"
+    CASCADING = "cascading"
+    OSCILLATING = "oscillating"
+    REINFORCING = "reinforcing"
+
 
 class ElementType(Enum):
     TOKEN = "token"
     HEAD = "head"
     MLP = "mlp"
-    SUBSPACE = "subspace"  # ✅ Already there
+    SUBSPACE = "subspace"
     POSITION = "position"
-    LAYER = "layer"        # ✅ Add for layer-level elements
+    LAYER = "layer"
+
 
 class ConnectionType(Enum):
     ATTENTION = "attention"
@@ -29,35 +64,92 @@ class ConnectionType(Enum):
     MLP = "mlp"
     COMPOSITE = "composite"
 
+
 class EmergencePhase(Enum):
-    """Circuit emergence phases during training"""
-    EARLY = "early"          # 0-100 epochs, often noisy
-    MIDDLE = "middle"        # 100-500 epochs, genuine learning
-    LATE = "late"           # 500+ epochs, refined mechanisms
-    GROKKING = "grokking"   # During phase transitions
-    POST_GROKKING = "post_grokking"  # After stabilization
+    """Circuit emergence phases during training - FIXED"""
+    EARLY = "early"
+    MIDDLE = "middle"
+    LATE = "late"
+    GROKKING = "grokking"
+    POST_GROKKING = "post_grokking"
+    # NEW: Missing fields for CircuitEvolutionTracker
+    MATURE = "mature"
+    DEVELOPING = "developing"
 
 
 class CircuitStability(Enum):
     """Circuit stability classifications"""
-    TRANSIENT = "transient"     # Seen <3 times
-    EMERGING = "emerging"       # Recent appearance, increasing
-    STABLE = "stable"          # Consistent presence
-    PERSISTENT = "persistent"   # Long-term presence
-    DECLINING = "declining"     # Decreasing presence
-    DEFUNCT = "defunct"        # No longer present
+    TRANSIENT = "transient"
+    EMERGING = "emerging"
+    STABLE = "stable"
+    PERSISTENT = "persistent"
+    DECLINING = "declining"
+    DEFUNCT = "defunct"
 
 
 class RelationshipType(Enum):
     """Types of relationships between circuits"""
-    PREREQUISITE = "prerequisite"       # A enables B
-    COMPETITIVE = "competitive"         # A competes with B
-    COOPERATIVE = "cooperative"         # A works with B
-    COMPOSITIONAL = "compositional"     # A is part of B
-    ALTERNATIVE = "alternative"         # A can replace B
-    SUPER_ADDITIVE = "super_additive"   # A+B > A+B individually
+    PREREQUISITE = "prerequisite"
+    COMPETITIVE = "competitive"
+    COOPERATIVE = "cooperative"
+    COMPOSITIONAL = "compositional"
+    ALTERNATIVE = "alternative"
+    SUPER_ADDITIVE = "super_additive"
 
 
+class LearningPhase(Enum):
+    """Task-agnostic learning phases"""
+    EARLY_LEARNING = "early_learning"
+    MEMORIZATION = "memorization"
+    TRANSITION = "transition"
+    GENERALIZATION = "generalization"
+    CONSOLIDATION = "consolidation"
+
+
+class InteractionType(Enum):
+    """Types of circuit interactions"""
+    ENABLES = "enables"
+    COMPETES = "competes"
+    COOPERATES = "cooperates"
+    REPLACES = "replaces"
+    REINFORCES = "reinforces"
+
+
+class EvolutionPattern(Enum):
+    """Patterns of circuit evolution - FIXED"""
+    GRADUAL = "gradual"
+    SUDDEN = "sudden"
+    OSCILLATING = "oscillating"
+    CASCADING = "cascading"
+    # NEW: Missing fields for CircuitEvolutionTracker
+    GRADUAL_EMERGENCE = "gradual_emergence"
+    SUDDEN_EMERGENCE = "sudden_emergence"
+    PLATEAUING = "plateauing"
+    DECLINING = "declining"
+
+
+# NEW: Missing enums for analyzer classes
+class CircuitLevel(Enum):
+    """Levels of circuit analysis"""
+    TOKEN = "token"
+    COMPONENT = "component"
+    SUBSPACE = "subspace"
+    LAYER = "layer"
+    GLOBAL = "global"
+
+
+class GrokkingPhase(Enum):
+    """Phases of grokking process"""
+    PRE_GROKKING = "pre_grokking"
+    GROKKING_ONSET = "grokking_onset"
+    GROKKING_TRANSITION = "grokking_transition"
+    POST_GROKKING = "post_grokking"
+    CONSOLIDATION = "consolidation"
+
+
+# ============================================================================
+# CORE DATACLASSES
+# ============================================================================
 
 @dataclass
 class Element:
@@ -87,8 +179,8 @@ class Element:
 @dataclass
 class Connection:
     """A connection between two elements in a circuit"""
-    source: str  # Element id
-    target: str  # Element id
+    source: str
+    target: str
     strength: float
     type: ConnectionType
     properties: Dict[str, Any] = field(default_factory=dict)
@@ -115,42 +207,77 @@ class Connection:
         )
 
 
+# ============================================================================
+# TEMPORAL/EVOLUTION DATACLASSES - FIXED
+# ============================================================================
+
 @dataclass
-class Circuit:
-    """A circuit representing a functional unit in the model"""
-    id: str
-    type: CircuitType
-    elements: List[Element] = field(default_factory=list)
-    connections: List[Connection] = field(default_factory=list)
-    attribution: float = 0.0
+class InteractionEvent:
+    """Records specific interaction between circuits"""
+    epoch: int
+    source_circuit: str
+    target_circuit: str
+    interaction_type: InteractionType
+    strength: float
+    confidence: float = 0.5
+    context: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class EvolutionSnapshot:
+    """Circuit state at specific epoch - FIXED"""
+    epoch: int
+    attribution: float
+    learning_phase: LearningPhase
+    detection_confidence: float = 0.5
+    stability_score: float = 0.0
+    behavioral_impact: float = 0.0
+    # NEW: Missing field for CircuitEvolutionTracker
+    active_interactions: List[str] = field(default_factory=list)
+    context_metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# NEW: Missing class for CircuitEvolutionAnalyzer
+@dataclass
+class LearningPhaseTransition:
+    """Represents a transition between learning phases"""
+    from_phase: LearningPhase
+    to_phase: LearningPhase
+    transition_epoch: int
+    circuits_affected: List[str] = field(default_factory=list)
+    interaction_changes: Dict[str, Any] = field(default_factory=dict)
+    transition_strength: float = 0.0
+    duration: int = 0  # epochs
     metadata: Dict[str, Any] = field(default_factory=dict)
-    discovered_at: Optional[int] = None  # Epoch when discovered
 
-    def to_dict(self) -> Dict:
-        """Convert to dictionary for serialization"""
-        return {
-            "id": self.id,
-            "type": self.type.value,
-            "elements": [e.to_dict() for e in self.elements],
-            "connections": [c.to_dict() for c in self.connections],
-            "attribution": self.attribution,
-            "metadata": self.metadata,
-            "discovered_at": self.discovered_at
-        }
 
-    @classmethod
-    def from_dict(cls, data: Dict) -> 'Circuit':
-        """Create from dictionary"""
-        return cls(
-            id=data["id"],
-            type=CircuitType(data["type"]),
-            elements=[Element.from_dict(e) for e in data["elements"]],
-            connections=[Connection.from_dict(c) for c in data["connections"]],
-            attribution=data["attribution"],
-            metadata=data.get("metadata", {}),
-            discovered_at=data.get("discovered_at")
-        )
+# NEW: Missing analyzer classes
+@dataclass
+class TemporalMetrics:
+    """Metrics for temporal analysis"""
+    emergence_rate: float = 0.0
+    stability_trend: float = 0.0
+    interaction_intensity: float = 0.0
+    phase_transition_frequency: float = 0.0
+    circuit_lifetime: float = 0.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
+
+@dataclass
+class CircuitDependencies:
+    """Circuit dependency relationships"""
+    circuit_id: str
+    prerequisites: List[str] = field(default_factory=list)
+    dependent_circuits: List[str] = field(default_factory=list)
+    dependency_strength: Dict[str, float] = field(default_factory=dict)
+    dependency_type: Dict[str, str] = field(default_factory=dict)
+    temporal_dependencies: List[Tuple[str, int]] = field(default_factory=list)  # (circuit_id, epoch)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# ============================================================================
+# CIRCUIT METADATA - ENHANCED
+# ============================================================================
 
 @dataclass
 class CircuitMetadata:
@@ -188,6 +315,11 @@ class CircuitMetadata:
     manipulation_effects: Dict[str, float] = field(default_factory=dict)
     cross_method_consistency: Dict[str, float] = field(default_factory=dict)
 
+    # Evolution recording
+    evolution_snapshots: List[EvolutionSnapshot] = field(default_factory=list)
+    interaction_events: List[InteractionEvent] = field(default_factory=list)
+    learning_phases: Dict[int, LearningPhase] = field(default_factory=dict)
+
     def to_dict(self) -> Dict:
         """Convert to dictionary for serialization"""
         return {
@@ -211,7 +343,33 @@ class CircuitMetadata:
             "competes_with": list(self.competes_with),
             "cooperates_with": list(self.cooperates_with),
             "manipulation_effects": self.manipulation_effects,
-            "cross_method_consistency": self.cross_method_consistency
+            "cross_method_consistency": self.cross_method_consistency,
+            "evolution_snapshots": [
+                {
+                    "epoch": s.epoch,
+                    "attribution": s.attribution,
+                    "learning_phase": s.learning_phase.value,
+                    "detection_confidence": s.detection_confidence,
+                    "stability_score": s.stability_score,
+                    "behavioral_impact": s.behavioral_impact,
+                    "active_interactions": s.active_interactions,
+                    "context_metadata": s.context_metadata
+                }
+                for s in self.evolution_snapshots
+            ],
+            "interaction_events": [
+                {
+                    "epoch": e.epoch,
+                    "source_circuit": e.source_circuit,
+                    "target_circuit": e.target_circuit,
+                    "interaction_type": e.interaction_type.value,
+                    "strength": e.strength,
+                    "confidence": e.confidence,
+                    "context": e.context
+                }
+                for e in self.interaction_events
+            ],
+            "learning_phases": {k: v.value for k, v in self.learning_phases.items()}
         }
 
     @classmethod
@@ -239,109 +397,188 @@ class CircuitMetadata:
         metadata.cooperates_with = set(data.get("cooperates_with", []))
         metadata.manipulation_effects = data.get("manipulation_effects", {})
         metadata.cross_method_consistency = data.get("cross_method_consistency", {})
+
+        # Restore evolution snapshots
+        for s_data in data.get("evolution_snapshots", []):
+            snapshot = EvolutionSnapshot(
+                epoch=s_data["epoch"],
+                attribution=s_data["attribution"],
+                learning_phase=LearningPhase(s_data["learning_phase"]),
+                detection_confidence=s_data.get("detection_confidence", 0.5),
+                stability_score=s_data.get("stability_score", 0.0),
+                behavioral_impact=s_data.get("behavioral_impact", 0.0),
+                active_interactions=s_data.get("active_interactions", []),
+                context_metadata=s_data.get("context_metadata", {})
+            )
+            metadata.evolution_snapshots.append(snapshot)
+
+        # Restore interaction events
+        for e_data in data.get("interaction_events", []):
+            event = InteractionEvent(
+                epoch=e_data["epoch"],
+                source_circuit=e_data["source_circuit"],
+                target_circuit=e_data["target_circuit"],
+                interaction_type=InteractionType(e_data["interaction_type"]),
+                strength=e_data["strength"],
+                confidence=e_data.get("confidence", 0.5),
+                context=e_data.get("context", {})
+            )
+            metadata.interaction_events.append(event)
+
+        # Restore learning phases
+        metadata.learning_phases = {
+            int(k): LearningPhase(v) for k, v in data.get("learning_phases", {}).items()
+        }
+
         return metadata
 
 
+# ============================================================================
+# CIRCUIT CLASS - FIXED VERSION
+# ============================================================================
+
+@dataclass
+class Circuit:
+    """A circuit representing a functional unit in the model"""
+    id: str
+    type: CircuitType
+    elements: List[Element] = field(default_factory=list)
+    connections: List[Connection] = field(default_factory=list)
+    attribution: float = 0.0
+    metadata: Union[Dict[str, Any], CircuitMetadata] = field(default_factory=dict)
+    discovered_at: Optional[int] = None
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for serialization"""
+        if isinstance(self.metadata, CircuitMetadata):
+            metadata_dict = self.metadata.to_dict()
+        else:
+            metadata_dict = self.metadata
+
+        return {
+            "id": self.id,
+            "type": self.type.value,
+            "elements": [e.to_dict() for e in self.elements],
+            "connections": [c.to_dict() for c in self.connections],
+            "attribution": self.attribution,
+            "metadata": metadata_dict,
+            "discovered_at": self.discovered_at
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Circuit':
+        """Create from dictionary"""
+        elements = [Element.from_dict(e) for e in data.get("elements", [])]
+        connections = [Connection.from_dict(c) for c in data.get("connections", [])]
+
+        metadata = data.get("metadata", {})
+        if isinstance(metadata, dict) and "emergence_phase" in metadata:
+            metadata = CircuitMetadata.from_dict(metadata)
+
+        return cls(
+            id=data["id"],
+            type=CircuitType(data["type"]),
+            elements=elements,
+            connections=connections,
+            attribution=data.get("attribution", 0.0),
+            metadata=metadata,
+            discovered_at=data.get("discovered_at")
+        )
+
+
+# ============================================================================
+# SAVE/LOAD FUNCTIONS (Fixed versions)
+# ============================================================================
 
 def save_circuits(circuits: List[Circuit], filepath: Union[str, Path]) -> None:
     """Save circuits to a JSON file using custom encoder"""
     filepath = Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
 
-    # ✅ UPDATED: Use CircuitJSONEncoder for robust serialization
     try:
         with open(filepath, 'w') as f:
-            json.dump({
-                "schema_version": "1.0",
-                "circuits": [c.to_dict() for c in circuits]
-            }, f, cls=CircuitJSONEncoder, indent=2)  # ✅ Use custom encoder
-
-        print(f"\t{get_current_callable_info()}:\t✅ Saved {len(circuits)} circuits to {filepath}")
-
+            json.dump([circuit.to_dict() for circuit in circuits], f,
+                      cls=CircuitJSONEncoder, indent=2)
+        print(f"✅ Saved {len(circuits)} circuits to {filepath}")
     except Exception as e:
-        print(f"\t{get_current_callable_info()}:\t⚠️ Error saving circuits with CircuitJSONEncoder: {e}")
-        # Fallback to basic JSON with data cleaning
-        _save_circuits_fallback(circuits, filepath)
-
-
-def _save_circuits_fallback(circuits: List[Circuit], filepath: Union[str, Path]):
-    """Fallback saving with data cleaning"""
-    try:
-        # Clean circuit data for basic JSON
-        cleaned_circuits = []
-        for circuit in circuits:
-            circuit_dict = circuit.to_dict()
-            cleaned_dict = _clean_for_basic_json(circuit_dict)
-            cleaned_circuits.append(cleaned_dict)
-
+        print(f"⚠️ Error saving circuits with custom encoder: {e}")
+        # Fallback to basic JSON
         with open(filepath, 'w') as f:
-            json.dump({
-                "schema_version": "1.0",
-                "circuits": cleaned_circuits,
-                "note": "Saved with fallback cleaning - some data may be simplified"
-            }, f, indent=2)
+            json.dump([circuit.to_dict() for circuit in circuits], f, indent=2)
+        print(f"✅ Saved {len(circuits)} circuits to {filepath} (fallback)")
 
-        print(f"\t{get_current_callable_info()}:\t📝 Saved {len(circuits)} circuits to {filepath} (with fallback cleaning)")
-
-    except Exception as e:
-        print(f"\t{get_current_callable_info()}:\t❌ Failed to save circuits even with fallback: {e}")
-
-def _clean_for_basic_json(obj):
-    """Clean object for basic JSON serialization"""
-    if isinstance(obj, dict):
-        return {k: _clean_for_basic_json(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_clean_for_basic_json(item) for item in obj]
-    elif isinstance(obj, tuple):
-        return [_clean_for_basic_json(item) for item in obj]
-    elif isinstance(obj, Enum):
-        return obj.value
-    elif isinstance(obj, (int, float, str, bool)) or obj is None:
-        return obj
-    elif hasattr(obj, '__dict__'):
-        return _clean_for_basic_json(obj.__dict__)
-    else:
-        return str(obj)  # Convert to string as fallback
 
 def load_circuits(filepath: Union[str, Path]) -> List[Circuit]:
-    """Load circuits from a JSON file with object reconstruction"""
+    """Load circuits from a JSON file"""
+    filepath = Path(filepath)
+    if not filepath.exists():
+        print(f"⚠️ Circuit file {filepath} does not exist")
+        return []
 
-    # ✅ UPDATED: Import load function for reconstruction
-    from analysis.utils.utils import load_circuit_logs
-
-    try:
-        # Try loading with reconstruction first
-        data = load_circuit_logs(filepath)
-
-        schema_version = data.get("schema_version", "1.0")
-        circuits_data = data.get("circuits", [])
-
-        # Convert back to Circuit objects
-        circuits = [Circuit.from_dict(c) for c in circuits_data]
-
-        print(f"\t{get_current_callable_info()}:\t✅ Loaded {len(circuits)} circuits from {filepath}")
-        return circuits
-
-    except Exception as e:
-        print(f"\t{get_current_callable_info()}:\t⚠️ Error loading with reconstruction: {e}")
-        # Fallback to basic JSON loading
-        return _load_circuits_basic(filepath)
-
-
-def _load_circuits_basic(filepath: Union[str, Path]) -> List[Circuit]:
-    """Fallback loading with basic JSON"""
     try:
         with open(filepath, 'r') as f:
-            data = json.load(f)
+            circuits_data = json.load(f)
 
-        schema_version = data.get("schema_version", "1.0")
-        circuits_data = data.get("circuits", [])
-
-        circuits = [Circuit.from_dict(c) for c in circuits_data]
-
-        print(f"\t{get_current_callable_info()}:\t📝 Loaded {len(circuits)} circuits from {filepath} (basic JSON)")
+        circuits = [Circuit.from_dict(circuit_data) for circuit_data in circuits_data]
+        print(f"✅ Loaded {len(circuits)} circuits from {filepath}")
         return circuits
-
     except Exception as e:
-        print(f"\t{get_current_callable_info()}:\t❌ Failed to load circuits: {e}")
+        print(f"❌ Error loading circuits from {filepath}: {e}")
         return []
+
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def create_empty_circuit_metadata() -> CircuitMetadata:
+    """Create empty CircuitMetadata with proper defaults"""
+    return CircuitMetadata()
+
+
+def convert_dict_to_circuit_metadata(metadata_dict: Dict[str, Any]) -> CircuitMetadata:
+    """Convert dictionary to CircuitMetadata object"""
+    if not metadata_dict:
+        return create_empty_circuit_metadata()
+    return CircuitMetadata.from_dict(metadata_dict)
+
+
+def ensure_circuit_has_proper_metadata(circuit: Circuit) -> Circuit:
+    """Ensure circuit has proper CircuitMetadata object"""
+    if not isinstance(circuit.metadata, CircuitMetadata):
+        circuit.metadata = convert_dict_to_circuit_metadata(circuit.metadata)
+    return circuit
+
+
+# ============================================================================
+# VALIDATION FUNCTIONS
+# ============================================================================
+
+def validate_circuit_schema():
+    """Validate that all required components are present"""
+    required_enums = [
+        EmergencePhase.MATURE,
+        EmergencePhase.DEVELOPING,
+        EvolutionPattern.GRADUAL_EMERGENCE,
+        EvolutionPattern.SUDDEN_EMERGENCE,
+        EvolutionPattern.PLATEAUING,
+        EvolutionPattern.DECLINING
+    ]
+
+    required_classes = [
+        LearningPhaseTransition,
+        TemporalMetrics,
+        CircuitDependencies,
+        CircuitLevel,
+        GrokkingPhase
+    ]
+
+    print("✅ All required enum values present")
+    print("✅ All required classes defined")
+    print("✅ Schema ready for Phase 2 transition")
+
+    return True
+
+
+if __name__ == "__main__":
+    validate_circuit_schema()

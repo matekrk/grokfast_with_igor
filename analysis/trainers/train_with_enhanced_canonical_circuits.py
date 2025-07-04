@@ -3,14 +3,19 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+
+from analysis.canonical.sampled_circuit_analysis import create_standard_canonical_system
 # import pandas as pd
 
 # from analysis import EnhancedCircuitRegistry, CircuitThresholds, ComputationalBudget
 # from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
 # from analysis.canonical.sampled_circuit_analysis import run_canonical_circuit_analysis_with_sampling
 from analysis.core.canonical_circuit_system import CanonicalCircuitRegistry, FunctionalCircuitSignatureExtractor
+from analysis.core.circuit_evolution_analyzer import CircuitEvolutionAnalyzer, \
+    create_evolution_analyzer_from_existing_tracker
+from analysis.core.circuit_evolution_tracker import CircuitEvolutionTracker
 from analysis.core.json_safe_canonical_circuits import JSONSafeCanonicalCircuitRegistry, \
-    JSONSafeCanonicalRegistryAdapter, create_json_safe_canonical_system
+    JSONSafeCanonicalRegistryAdapter
 # from analysis.examples.enhanced_circuit_canonical_circuits_management import analyze_training_results
 # from analysis.core.unified_logger import UnifiedLogger
 # from analysis.helpers import example_sampler
@@ -72,7 +77,7 @@ def extend_canonical_registry_for_new_types(registry: CanonicalCircuitRegistry):
 
     return registry
 
-
+'''
 def initialize_canonical_circuits_experimental_architecture(model, save_dir, logger,
                                                             eval_loader, num_samples=12,
                                                             enhanced_registry=None,
@@ -111,7 +116,7 @@ def initialize_canonical_circuits_experimental_architecture(model, save_dir, log
                                                           strategy_config=sampling_config)
 
     # info create canonical-aware adaptive detector with JSON safety included
-    from analysis.integration.canonical_integration_guide import CanonicalAwareAdaptiveTokenOperationDetector
+    from analysis.analyzers.fixed_adaptive_token_operations import CanonicalAwareAdaptiveTokenOperationDetector
     canonical_detector = CanonicalAwareAdaptiveTokenOperationDetector(
         model=model,
         enhanced_registry=enhanced_registry,
@@ -133,7 +138,7 @@ def initialize_canonical_circuits_experimental_architecture(model, save_dir, log
         'example_sampler': example_sampler,
         'quality_analyzer': circuit_quality_analyzer,
     }
-
+'''
 '''
 def _get_logger(experiment_name, model, save_dir,
                 enable_wandb_logging=False, enable_file_logging=True,
@@ -460,7 +465,7 @@ def analyze_cross_example_patterns(example_analyses, cross_example_threshold=0.3
         }
     }
 
-
+'''
 def perform_circuit_detection(canonical_detector, eval_loader, epoch, total_epochs,
                               accuracy, logger):
     """
@@ -497,6 +502,58 @@ def perform_circuit_detection(canonical_detector, eval_loader, epoch, total_epoc
         'copy_results': copy_results,
         'induction_results': induction_results
     }
+'''
+
+def create_standard_thresholds(stage="early_training"):
+    """Create standardized threshold configuration"""
+
+    from analysis import CircuitThresholds
+    configs = {
+        "early_training": CircuitThresholds(
+            copy_attention_min=0.3, copy_attention_max=0.85,
+            induction_attention_min=0.4, induction_attention_max=0.8,
+            warmup_epochs=100, min_accuracy_threshold=0.15
+        ),
+        "late_training": CircuitThresholds(
+            copy_attention_min=0.5, copy_attention_max=0.9,
+            induction_attention_min=0.6, induction_attention_max=0.85,
+            warmup_epochs=50, min_accuracy_threshold=0.3
+        )
+    }
+
+    return configs[stage]
+
+
+def validate_canonical_system_health(circuit_system):
+    """Validate system before proceeding with Phase 1"""
+
+    issues = []
+
+    # Check canonical registry type
+    if not isinstance(circuit_system['canonical_registry'], JSONSafeCanonicalCircuitRegistry):
+        issues.append("Not using JSON-safe canonical registry")
+
+    # Check detector type
+    from analysis.analyzers.adaptive_token_operations import CanonicalAwareAdaptiveTokenOperationDetector
+    if not isinstance(circuit_system['canonical_detector'], CanonicalAwareAdaptiveTokenOperationDetector):
+        issues.append("Not using canonical-aware detector")
+
+    # Test JSON serialization
+    try:
+        test_data = circuit_system['canonical_registry'].get_registry_summary()
+        from analysis.utils.utils import CircuitJSONEncoder
+        import json
+        json.dumps(test_data, cls=CircuitJSONEncoder)
+    except Exception as e:
+        issues.append(f"JSON serialization test failed: {e}")
+
+    if issues:
+        print("❌ Fix these issues before continuing:")
+        for issue in issues:
+            print(f"  - {issue}")
+        exit(1)
+
+    return issues
 
 
 
@@ -505,7 +562,7 @@ def train_with_enhanced_circuit_management(
         model, train_loader, eval_loader,
         criterion, optimizer,
         scheduler=None, device='cuda', checkpointManager=None,
-        epochs=10000, log_interval=4,
+        epochs=6000, log_interval=4,
         # Enhanced circuit management parameters
         circuit_assessment_interval=32,
         circuit_management_config=None,
@@ -549,10 +606,17 @@ def train_with_enhanced_circuit_management(
         log_level=log_level
     )
 
+
+    thresholds = create_standard_thresholds("early_training")
     # Initialize JSON-safe canonical circuit system
-    circuit_system = create_json_safe_canonical_system(model, save_dir, logger)
+    circuit_system = create_standard_canonical_system(model=model, save_dir=save_dir,
+                                                      logger=logger, eval_loader=eval_loader,
+                                                      thresholds=thresholds)
     canonical_registry = circuit_system['canonical_registry']
     canonical_detector = circuit_system['canonical_detector']
+
+    # Use before starting training:
+    issues = validate_canonical_system_health(circuit_system)
 
     # Initialize enhanced circuit quality system
     circuit_config = circuit_management_config or get_default_circuit_config()
@@ -596,6 +660,16 @@ def train_with_enhanced_circuit_management(
     example_sampler = create_fast_circuit_example_sampler(eval_loader=eval_loader,
                                                           strategy_config=sampling_config)
 
+    from analysis.temporal import create_temporal_analysis_system
+    circuit_evolution_tracker = circuit_system["evolution_tracker"]
+    circuit_evolution_analyzer = create_evolution_analyzer_from_existing_tracker(
+        evolution_tracker=circuit_system["evolution_tracker"],
+        enhanced_registry=circuit_system["enhanced_registry"],
+        storage_dir = save_dir / "research"
+    )
+
+    temporal_analysis_system = create_temporal_analysis_system(save_dir / "temporal_evolution")
+
     # Main training loop
     for epoch in range(epochs):
         epoch_start_time = time.time()
@@ -605,18 +679,22 @@ def train_with_enhanced_circuit_management(
 
         if scheduler:
             scheduler.step()
-
+        pre_post_width = 2
         # Evaluation
         pre_current_accuracy = eval_stats['accuracy'] if eval_stats else 0.0
         should_evaluate = epoch % log_interval == 0 or epoch == epochs - 1
-        should_assess_circuits = (epoch % circuit_assessment_interval == 0 and epoch > 50 and
-                                  pre_current_accuracy > access_circuits_threshold)
+        should_assess_circuits = (((epoch % circuit_assessment_interval)
+                                   in range(circuit_assessment_interval - pre_post_width,
+                                            circuit_assessment_interval + pre_post_width))
+                                  and epoch > 50 and pre_current_accuracy > access_circuits_threshold)
 
         if should_evaluate or should_assess_circuits:
             eval_stats = evaluate(model, eval_loader, criterion, device)
             current_accuracy = eval_stats['accuracy']
-            should_assess_circuits = (epoch % circuit_assessment_interval == 0 and epoch > 50 and
-                                      current_accuracy > access_circuits_threshold)
+            should_assess_circuits = (((epoch % circuit_assessment_interval)
+                                       in range(circuit_assessment_interval - pre_post_width,
+                                                circuit_assessment_interval + pre_post_width))
+                                      and epoch > 50 and pre_current_accuracy > access_circuits_threshold)
             # Update training metrics history
             training_metrics['epoch'].append(epoch)
             training_metrics['loss'].append(eval_stats['loss'])
@@ -631,7 +709,7 @@ def train_with_enhanced_circuit_management(
                     "eval_accuracy": eval_stats['accuracy'],
                     "learning_rate": optimizer.param_groups[0]['lr'],
                 }
-                if epoch % (2 * log_interval) == 0 or should_assess_circuits:
+                if epoch % (2 * log_interval) == 0 or should_assess_circuits or (epoch % ()):
                     logger.log_metrics(training_metrics_log, step=epoch, category="training")
 
                 # info detect grokking  todo fixme Is it needed here?
@@ -640,6 +718,7 @@ def train_with_enhanced_circuit_management(
         # 🔬 ENHANCED CIRCUIT DETECTION AND MANAGEMENT
         if should_assess_circuits:
             # logger.info(f"🔬 Enhanced circuit management @ epoch {epoch}")
+            canonical_detector.update_thresholds_for_epoch(epoch=epoch, model_accuracy=current_accuracy)
 
             # 🆕 Step 1: ROBUST MULTI-EXAMPLE CIRCUIT DETECTION
             if enable_robust_detection:
@@ -703,6 +782,7 @@ def train_with_enhanced_circuit_management(
                 )
                 circuit_snapshots.append(circuit_snapshot)
 
+
         # Periodic saves (same as before)
         if epoch % 500 == 0 and epoch > 0:
             try:
@@ -759,6 +839,9 @@ def train_with_enhanced_circuit_management(
 
     except Exception as e:
         logger.warning(f"Failed to save final DataFrame: {e}")
+
+
+    report = circuit_evolution_analyzer.generate_research_report()
 
     return {
         'model': model,

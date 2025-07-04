@@ -15,6 +15,46 @@ from analysis.core.canonical_circuit_system import CanonicalCircuitRegistry, Can
 from analysis.sampling.fast_subset_sampler import FastCircuitSampler
 
 
+# Create single canonical initialization function
+def create_standard_canonical_system(model, save_dir, logger, eval_loader, thresholds=None):
+    """Standard canonical system initialization - USE THIS EVERYWHERE"""
+
+    # Use JSON-safe canonical registry (proven to work)
+    from analysis.core.json_safe_canonical_circuits import JSONSafeCanonicalCircuitRegistry
+    from analysis.core.canonical_circuit_system import extend_canonical_registry_for_new_types
+    canonical_registry = JSONSafeCanonicalCircuitRegistry(save_dir / "canonical_circuits")
+    canonical_registry = extend_canonical_registry_for_new_types(canonical_registry)
+
+    # Standard enhanced registry
+    from analysis import EnhancedCircuitRegistry
+    enhanced_registry = EnhancedCircuitRegistry(save_dir / "enhanced_registry")
+
+    # JSON-safe adapter (critical for data persistence)
+    from analysis.core.json_safe_canonical_circuits import JSONSafeCanonicalRegistryAdapter
+    adapter = JSONSafeCanonicalRegistryAdapter(enhanced_registry, canonical_registry)
+
+    # Evolution tracker with unified interface
+    from analysis.core.circuit_evolution_tracker import CircuitEvolutionTracker
+    evolution_tracker = CircuitEvolutionTracker(circuit_metadata=model.circuit_metadata,)
+
+    # Standard detector - ALWAYS use CanonicalAwareAdaptiveTokenOperationDetector
+    from analysis.analyzers.adaptive_token_operations import CanonicalAwareAdaptiveTokenOperationDetector
+    canonical_detector = CanonicalAwareAdaptiveTokenOperationDetector(
+        model=model,
+        enhanced_registry=enhanced_registry,
+        canonical_registry=canonical_registry,
+        enable_dynamic_thresholds=True
+    )
+
+    return {
+        'canonical_registry': canonical_registry,
+        'enhanced_registry': enhanced_registry,
+        'adapter': adapter,
+        'evolution_tracker': evolution_tracker,
+        'canonical_detector': canonical_detector
+    }
+
+
 def run_canonical_circuit_analysis_with_sampling(
         canonical_detector, example_sampler: ExampleSampler,
         epoch: int, total_epochs: int, accuracy: float,
@@ -879,8 +919,8 @@ def updated_training_loop_with_canonical_sampling(
     save_dir.mkdir(parents=True, exist_ok=True)
 
     # ✅ INITIALIZE: Canonical circuit system
-    from analysis.integration.canonical_integration_guide import initialize_canonical_system
-    circuit_system = initialize_canonical_system(model, save_dir, logger)
+    circuit_system = create_standard_canonical_system(model=model, save_dir=save_dir, logger=logger,
+                                                      eval_loader=eval_loader)
     canonical_detector = circuit_system['canonical_detector']
 
     # ✅ INITIALIZE: Example sampler

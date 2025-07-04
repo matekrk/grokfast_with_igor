@@ -1,5 +1,6 @@
 from collections import defaultdict
 from pathlib import Path
+from typing import Dict, Union, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,28 +9,35 @@ import seaborn as sns
 import torch
 from sklearn.decomposition import PCA
 
+from analysis.core import CanonicalRegistryAdapter
 from analysis.utils.utils import get_current_callable_info
 
 
-# todo let EnhancedWeightSpaceTracker inherit from analysis.core.weight_space.WeightSpaceTracker
 class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
     """Enhanced tracker for model's trajectory in weight space with jump detection and analysis"""
 
-    def __init__(self, model, save_dir=None, pca_components=50, logger=None, registry=None, snapshot_freq=10,
+    def __init__(self, model, save_dir=None, logger=None, canonical_registry=None,
+                 pca_components=50, snapshot_freq=10,
                  sliding_window_size=5, dense_sampling=True, jump_detection_window=100,
                  jump_threshold=1.0):
         # info initialization code...
+        # info nitialize JSON safety utility
+        from analysis.core.json_safe_analyzer import JSONSafeAnalyzer
+        self.json_util = JSONSafeAnalyzer()
+
         # info is in base
-        self.model = model  # fixme yes
-        self.save_dir = Path(save_dir)  # fixme yes
+        self.model = model
+        self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True, parents=True)
 
-        self.pca_components = pca_components  # fixme yes
+        self.pca_components = pca_components
         self.snapshot_freq = snapshot_freq
         self.jump_detection_window = jump_detection_window
         self.jump_threshold = jump_threshold
         self.logger = logger
-        self.registry = registry
+        if canonical_registry is None:
+            raise ValueError("EnhancedWeightSpaceTracker requires canonical_registry")
+        self.canonical_registry = canonical_registry
 
         self.prev_state_dict = None  # For tracking parameter changes
         self.group_velocities_history = defaultdict(list)  # For velocity tracking
@@ -41,7 +49,8 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         # info storage for weight snapshots and trajectories
         self.weight_snapshots = []
         self.weight_timestamps = []
-        self.flattened_weights = []  # fixme yes
+        self.flattened_weights = []
+
         self.velocities = []
         self.accelerations = []
         self.pca = None  # fixme yes
@@ -68,6 +77,39 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
 
         # info counter for jump analysis
         self.jump_counter = 0
+
+
+    def save_weight_analysis(self, epoch: int, weight_data: Dict, spectral_data: Dict):
+        """Save weight analysis with JSON safety"""
+
+        # Prepare comprehensive analysis data
+        analysis_data = {
+            'epoch': epoch,
+            'weight_analysis': weight_data,
+            'spectral_analysis': spectral_data,
+            'jump_detections': self.jump_detections,
+            'tracker_config': {
+                'model_id': getattr(self.model, 'get_id', lambda: 'unknown')(),
+                'save_dir': str(self.save_dir)
+            }
+        }
+
+        # Validate JSON safety before saving
+        validation = self.json_util.validate_json_safety(analysis_data)
+
+        if validation['needs_conversion']:
+            print("⚠️ Data needs JSON conversion - applying automatic cleaning")
+
+        # Save using JSON-safe utility
+        filepath = self.save_dir / f"weight_analysis_epoch_{epoch}.json"
+        success = self.json_util.save_json_safe(analysis_data, filepath)
+
+        return success
+
+    def load_previous_analysis(self, epoch: int) -> Union[Dict, None]:
+        """Load previous analysis with JSON safety"""
+        filepath = self.save_dir / f"weight_analysis_epoch_{epoch}.json"
+        return self.json_util.load_json_safe(filepath)
 
     def take_snapshot(self, epoch, force=False):
         """Take a snapshot of the current model weights with improved jump detection"""
@@ -3253,3 +3295,88 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                 analyzer = getattr(self, analyzer_name)
                 if hasattr(analyzer, 'cleanup'):
                     analyzer.cleanup()
+
+
+class CanonicalAwareEnhancedWeightSpaceTracker:
+    """
+    Canonical-aware wrapper for EnhancedWeightSpaceTracker
+    Delegates analysis to existing implementation, adds canonical registration
+    """
+
+    def __init__(self, model, enhanced_registry, canonical_adapter: CanonicalRegistryAdapter,
+                 save_dir=None, logger=None, canonical_registry=None,
+                 pca_components=50, snapshot_freq=10,
+                 sliding_window_size=5, dense_sampling=True, jump_detection_window=100,
+                 jump_threshold=1.0):
+        self.canonical_adapter = canonical_adapter
+
+        # ✅ Include existing tracker as a field - delegate to it
+        self.weight_tracker = EnhancedWeightSpaceTracker(model, save_dir=save_dir,
+                                                         canonical_registry=canonical_adapter.canonical_registry,
+                                                         pca_components=pca_components, snapshot_freq=snapshot_freq,
+                                                         sliding_window_size=sliding_window_size,
+                                                         dense_sampling=dense_sampling,
+                                                         jump_detection_window=jump_detection_window,
+                                                         jump_threshold=jump_threshold
+                                                         )
+
+    def detect_weight_space_circuits(self, epoch: int, model_weights: Dict = None,
+                                     tokens: List[str] = None, **context) -> List[str]:
+        """
+        Detect weight space circuits using existing implementation + canonical registration
+        """
+        # ✅ Delegate to your existing implementation
+        if hasattr(self.weight_tracker, 'detect_subspace_circuits'):
+            # Use your existing method that returns circuits
+            existing_circuits = self.weight_tracker._detect_subspace_circuits(
+                layer_data=model_weights, epoch=epoch, **context
+            )
+        elif hasattr(self.weight_tracker, 'analyze_weight_patterns'):
+            # Or use whatever your existing method is called
+            weight_patterns = self.weight_tracker.analyze_weight_patterns(model_weights)
+            existing_circuits = [self.weight_tracker._create_circuit_from_pattern(p, epoch)
+                                 for p in weight_patterns]
+        elif hasattr(self.weight_tracker, 'analyze_mlp_subspaces_adaptive'):
+            subspace_circuits = []
+            for layer_idx in range(self.model.layers):
+                # fixme how to add current_accuracy and mlp_sparsity to **context?
+                #  info probably it would be enough to call it with that todo check if it works
+                subspace_metrics = self.weight_tracker.analyze_mlp_subspaces_adaptive(
+                    layer_idx=layer_idx, epoch=epoch, logger=self.weight_tracker.logger,
+                    **context
+                )
+                existing_circuits = subspace_metrics['circuits']
+                subspace_circuits.extend(existing_circuits)
+            # ✅ Register each detected circuit through canonical adapter
+            canonical_ids = []
+            for circuit in subspace_circuits:
+                try:
+                    canonical_id, legacy_id = self.canonical_adapter.register_circuit_detection(
+                        circuit=circuit,
+                        epoch=epoch,
+                        tokens=tokens or [],
+                        detection_confidence=circuit.attribution,  # Use circuit's attribution
+                        detection_method="weight_space_analysis",
+                        example_metadata={
+                            'analysis_type': 'weight_space',
+                            'layer_info': circuit.metadata.get('layer', 'unknown'),
+                            'feature_info': circuit.metadata.get('feature_direction', {}),
+                            'sparsity_info': circuit.metadata.get('sparsity', 0.0)
+                        }
+                    )
+                    canonical_ids.append(canonical_id)
+                except Exception as e:
+                    print(f"⚠️ Failed to register circuit {circuit.id}: {e}")
+        else:
+            # Fallback - call any method that returns circuits
+            existing_circuits = []
+            print("⚠️ Please specify the correct method name in EnhancedWeightSpaceTracker")
+
+
+        print(f"📊 Weight space analysis: {len(canonical_ids)} circuits registered canonically")
+        return canonical_ids
+
+    def __getattr__(self, name):
+        """Delegate any other method calls to the existing tracker"""
+        return getattr(self.weight_tracker, name)
+

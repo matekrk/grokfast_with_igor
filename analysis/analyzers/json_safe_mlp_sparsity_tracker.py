@@ -1,23 +1,30 @@
-# mlp_sparsity_tracker.py
+# json_safe_mlp_sparsity_tracker.py
+from typing import Dict, List
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
+from analysis.core import CanonicalRegistryAdapter
+# from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.core.circuit_schema import Element, ElementType, Circuit, CircuitType
+from analysis.core.json_safe_analyzer import JSONSafeAnalyzer
 
-
-class MLPSparsityTracker:
+class JSONSafeMLPSparsityTracker(JSONSafeAnalyzer):
     """Track the development of sparse representations in MLP layers"""
 
-    def __init__(self, model, save_dir, logger=None, registry=None, activation_threshold=0.1):
+    def __init__(self, model, save_dir, logger=None, canonical_registry=None, activation_threshold=0.1):
         self.model = model
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True, parents=True)
         self.logger = logger
         self.activation_threshold = activation_threshold
-        self.registry = registry
+
+        # info use the canonical registry
+        self.canonical_registry = canonical_registry
+        if self.canonical_registry is None:
+            print("⚠️ JSONSafeMLPSparsityTracker: No canonical registry provided!")
 
         # info storage for tracking sparsity evolution
         self.sparsity_history = {}
@@ -174,9 +181,9 @@ class MLPSparsityTracker:
         sparsity_circuits = self._create_sparsity_circuits(analysis_results, epoch)
 
         # info register circuits if registry is available
-        if self.registry:
+        if self.canonical_registry:
             for circuit in sparsity_circuits:
-                self.registry.register_circuit(circuit, source="sparsity_analysis")
+                self.canonical_registry.register_circuit(circuit, source="sparsity_analysis")
 
         # info store results in history
         self.sparsity_history[epoch] = {
@@ -269,13 +276,13 @@ class MLPSparsityTracker:
                 layer_idx = self._extract_layer_index(layer_name)
 
                 # Generate circuit ID
-                circuit_id = self.registry.generate_circuit_id(
+                circuit_id = self.canonical_registry.generate_circuit_id(
                     operation_type="sparse_subspace",
                     component_info=f"layer_{layer_idx}",
                     epoch=epoch,
                     sparsity_level=sparsity,
                     source="sparsity_analysis"
-                ) if self.registry else f"sparse_subspace_layer_{layer_idx}_{epoch}"
+                ) if self.canonical_registry else f"sparse_subspace_layer_{layer_idx}_{epoch}"
 
                 # Create subspace element
                 subspace_element = Element(
@@ -339,14 +346,14 @@ class MLPSparsityTracker:
                     neuron_indices = [int(n['neuron_id'].replace('neuron_', '')) for n in neurons]
 
                     # Generate circuit ID
-                    circuit_id = self.registry.generate_circuit_id(
+                    circuit_id = self.canonical_registry.generate_circuit_id(
                         operation_type="class_selective_neurons",
                         component_info=f"layer_{layer_idx}_class_{class_label}",
                         epoch=epoch,
                         selectivity_score=avg_selectivity,
                         neuron_count=len(neurons),
                         source="selectivity_analysis"
-                    ) if self.registry else f"selective_neurons_layer_{layer_idx}_class_{class_label}_{epoch}"
+                    ) if self.canonical_registry else f"selective_neurons_layer_{layer_idx}_class_{class_label}_{epoch}"
 
                     # Create selective subspace element
                     selective_element = Element(
@@ -419,14 +426,14 @@ class MLPSparsityTracker:
                     avg_correlation = np.mean(cluster_correlations[np.triu_indices_from(cluster_correlations, k=1)])
 
                     # Generate circuit ID
-                    circuit_id = self.registry.generate_circuit_id(
+                    circuit_id = self.canonical_registry.generate_circuit_id(
                         operation_type="coactive_cluster",
                         component_info=f"layer_{layer_idx}_cluster_{cluster_idx}",
                         epoch=epoch,
                         correlation_strength=avg_correlation,
                         cluster_size=len(neuron_indices),
                         source="coactivation_analysis"
-                    ) if self.registry else f"coactive_cluster_layer_{layer_idx}_c{cluster_idx}_{epoch}"
+                    ) if self.canonical_registry else f"coactive_cluster_layer_{layer_idx}_c{cluster_idx}_{epoch}"
 
                     # Create cluster element
                     cluster_element = Element(
@@ -637,3 +644,80 @@ class MLPSparsityTracker:
                 analyzer = getattr(self, analyzer_name)
                 if hasattr(analyzer, 'cleanup'):
                     analyzer.cleanup()
+
+
+class CanonicalAwareMLP_SparsityTracker:
+    """
+    Canonical-aware wrapper for MLPSparsityTracker
+    Delegates analysis to existing implementation, adds canonical registration
+    """
+
+    def __init__(self, model, save_dir, logger, canonical_adapter: CanonicalRegistryAdapter):
+        # self.model = model
+        # info centralized adapter
+        self.canonical_adapter = canonical_adapter
+
+        # ✅ Include existing tracker as a field - delegate to it
+        self.mlp_tracker = JSONSafeMLPSparsityTracker(model, save_dir=save_dir, logger=logger,
+                                                      canonical_registry=canonical_adapter.canonical_registry,
+                                                      activation_threshold=self.activation_threshold)
+
+    def detect_mlp_sparsity_circuits(self, epoch: int, mlp_activations: Dict = None,
+                                     tokens: List[str] = None, **context) -> List[str]:
+        """
+        Detect MLP sparsity circuits using existing implementation + canonical registration
+        """
+        # ✅ Delegate to your existing implementation
+        if hasattr(self.mlp_tracker, 'detect_sparse_features'):
+            # Use your existing method that returns circuits
+            existing_circuits = self.mlp_tracker.detect_sparse_features(
+                activations=mlp_activations, epoch=epoch, **context
+            )
+        if (hasattr(self.mlp_tracker, '_create_sparsity_circuits')
+                and hasattr(self.mlp_tracker, 'analyze_neuron_activity')):
+            # Use your existing method that returns circuits
+            # fixme add eval_loader and class_labels to **context and call analyze_neuron_activity(**context)
+            #  or directly call with such parameters?
+            analysis_results = self.analyze_neuron_activity(eval_loader, class_labels)
+            existing_circuits = self.mlp_tracker._create_sparsity_circuits(
+                analysis_results=analysis_results, epoch=epoch  #   fixme , **context
+            )
+        elif hasattr(self.mlp_tracker, 'analyze_sparsity_patterns'):
+            # Or use whatever your existing method is called
+            sparsity_patterns = self.mlp_tracker.analyze_sparsity_patterns(mlp_activations)
+            existing_circuits = [self.mlp_tracker._create_circuit_from_sparsity(p, epoch)
+                                 for p in sparsity_patterns]
+        else:
+            # Fallback
+            existing_circuits = []
+            print("⚠️ Please specify the correct method name in MLPSparsityTracker")
+
+        # ✅ Register each detected circuit through canonical adapter
+        canonical_ids = []
+        for circuit in existing_circuits:
+            try:
+                canonical_id, legacy_id = self.canonical_adapter.register_circuit_detection(
+                    circuit=circuit,
+                    epoch=epoch,
+                    tokens=tokens or [],
+                    detection_confidence=circuit.attribution,
+                    detection_method="mlp_sparsity_analysis",
+                    example_metadata={
+                        'analysis_type': 'mlp_sparsity',
+                        'sparsity_level': circuit.metadata.get('sparsity', 0.0),
+                        'layer_info': circuit.metadata.get('layer', 'unknown'),
+                        'neuron_info': circuit.metadata.get('neuron_idx', -1)
+                    }
+                )
+                canonical_ids.append(canonical_id)
+
+            except Exception as e:
+                print(f"⚠️ Failed to register circuit {circuit.id}: {e}")
+
+        print(f"📊 MLP sparsity analysis: {len(canonical_ids)} circuits registered canonically")
+        return canonical_ids
+
+    def __getattr__(self, name):
+        """Delegate any other method calls to the existing tracker"""
+        return getattr(self.mlp_tracker, name)
+

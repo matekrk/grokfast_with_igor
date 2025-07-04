@@ -4,18 +4,19 @@
 from pathlib import Path
 
 from analysis.analyzers import AdaptiveTokenOperationDetector
-# from typing import Dict, List, Optional, Any, Union
-
-from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
-from analysis.analyzers.integrated_token_discovery import IntegratedTokenCircuitDiscovery
-from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
-from analysis.analyzers.continuous_circuit_tracker import ContinuousCircuitTracker
 from analysis.analyzers.attention_pattern_analyzer import AttentionAnalyzer
-from analysis.core.circuit_schema import save_circuits, load_circuits, ElementType, CircuitType
+from analysis.analyzers.continuous_circuit_tracker import ContinuousCircuitTracker
+from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
+from analysis.analyzers.integrated_token_discovery import IntegratedTokenCircuitDiscovery
+from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
+from analysis.core.circuit_schema import (save_circuits, load_circuits, ElementType, CircuitType)
 from analysis.trainers.utils import (
     evaluate, log_metrics, train_epoch, detect_grokking, process_jumps
 )
-from analysis.utils.utils import init_train_dataloader_state, get_current_callable_info, shorten_layer_head
+from analysis.utils.utils import init_train_dataloader_state, get_current_callable_info
+
+
+# from typing import Dict, List, Optional, Any, Union
 
 
 def train_with_circuit_analysis(
@@ -71,7 +72,6 @@ def train_with_circuit_analysis(
     registry = CircuitRegistry(save_dir / "circuit_registry")
     # info set a shared logger
     shared_logger = model.logger if hasattr(model, 'logger') else None
-
 
     # Initialize weight tracker
     weight_tracker = EnhancedWeightSpaceTracker(
@@ -217,7 +217,8 @@ def train_with_circuit_analysis(
 
                 if lineage:
                     print(f"\t{get_current_callable_info()} @ {epoch}: \tcircuit evolution:")
-                    print(f"\t\tnew:\t{len(lineage.get('new_circuits', []))}\tevolved: {len(lineage.get('evolved_circuits', {}))}\tdefunct: {len(lineage.get('defunct_circuits', []))}")
+                    print(
+                        f"\t\tnew:\t{len(lineage.get('new_circuits', []))}\tevolved: {len(lineage.get('evolved_circuits', {}))}\tdefunct: {len(lineage.get('defunct_circuits', []))}")
                     # Print transformations
                     transformations = lineage.get('transformations', {})
 
@@ -264,7 +265,8 @@ def train_with_circuit_analysis(
             if cooperation and 'cooperating_groups' in cooperation:
                 cooperating_groups = cooperation['cooperating_groups']
                 if cooperating_groups:
-                    print(f"\t{get_current_callable_info()} @ {epoch}: \t\t{len(cooperating_groups)} cooperating groups")
+                    print(
+                        f"\t{get_current_callable_info()} @ {epoch}: \t\t{len(cooperating_groups)} cooperating groups")
                     for i, group in enumerate(cooperating_groups):
                         print(f"\t\tgroup {i + 1}: {len(group['circuit_ids'])} circuits")
 
@@ -301,7 +303,7 @@ def train_with_circuit_analysis(
 
                 total_batches = len(eval_loader)
                 min_batches_to_analyze = 3
-                num_batches_to_analyze = min (min_batches_to_analyze, total_batches)  # Analyze 3 batches instead of 1
+                num_batches_to_analyze = min(min_batches_to_analyze, total_batches)  # Analyze 3 batches instead of 1
                 selected_batch_indices = set(random.sample(range(total_batches, num_batches_to_analyze)))
                 # Analyze multiple batches for better statistics
                 circuit_results_list = []
@@ -391,12 +393,12 @@ def train_with_circuit_analysis(
                         cid1, cid2 = rel['circuit_pair']
                         print(f"  {i + 1}. {cid1} + {cid2}: {rel['co_occurrences']} co-occurrences")
 
-
         if registry.circuit_logger.should_take_snapshot(epoch=epoch, total_epochs=epochs):
             snapshot = registry.circuit_logger.snapshot_registry_state(epoch=epoch)
             # info log major discoveries
             if snapshot['total_circuits'] > 0:
-                print(f"\t{get_current_callable_info()} @ {epoch}: \t{snapshot['total_circuits']} total circuits discovered")
+                print(
+                    f"\t{get_current_callable_info()} @ {epoch}: \t{snapshot['total_circuits']} total circuits discovered")
                 # info log circuit type distribution
                 type_summary = "\t".join([f"{t}-level: {c}" for t, c in snapshot['circuits_by_type'].items()])
                 print(f"\t\t{type_summary}")
@@ -454,8 +456,6 @@ def train_with_circuit_analysis(
                 component_circuits=component_circuits,
                 functional_circuits=functional_circuits
             )
-
-
 
     # Final analysis of learning dynamics
     if token_discovery.evolution_tracker:

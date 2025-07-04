@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 from analysis.core.circuit_schema import Circuit, CircuitType
-from analysis.utils.utils import get_current_callable_info, shorten_layer_head
 
 
 class CircuitEvolutionTracker:

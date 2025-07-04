@@ -582,7 +582,7 @@ class JSONSafeCanonicalRegistryAdapter(CanonicalRegistryAdapter):
 # ============================================================================
 # UPDATED INTEGRATION FUNCTIONS
 # ============================================================================
-
+'''
 def create_json_safe_canonical_system(model, save_dir, logger, enhanced_registry=None):
     """Create JSON-safe canonical circuit system"""
 
@@ -605,7 +605,7 @@ def create_json_safe_canonical_system(model, save_dir, logger, enhanced_registry
     evolution_tracker = UnifiedCircuitEvolutionTracker(enhanced_registry, save_dir / "evolution", logger)
 
     # Create canonical-aware detector with JSON safety
-    from analysis.integration.canonical_integration_guide import CanonicalAwareAdaptiveTokenOperationDetector
+    from analysis.analyzers.fixed_adaptive token_operations import CanonicalAwareAdaptiveTokenOperationDetector
     canonical_detector = CanonicalAwareAdaptiveTokenOperationDetector(
         model=model,
         enhanced_registry=enhanced_registry,
@@ -621,8 +621,8 @@ def create_json_safe_canonical_system(model, save_dir, logger, enhanced_registry
         'evolution_tracker': evolution_tracker,
         'canonical_detector': canonical_detector
     }
-
-
+'''
+'''
 def test_json_safety(canonical_registry: JSONSafeCanonicalCircuitRegistry):
     """Test JSON safety of the canonical registry"""
 
@@ -663,12 +663,12 @@ def test_json_safety(canonical_registry: JSONSafeCanonicalCircuitRegistry):
         except Exception as e2:
             print(f"  ❌ Even cleaned data failed: {e2}")
             return False
-
+'''
 
 # ============================================================================
 # USAGE EXAMPLE
 # ============================================================================
-
+'''
 def example_json_safe_usage():
     """Example of using JSON-safe canonical system"""
 
@@ -692,3 +692,4 @@ def example_json_safe_usage():
     # test_json_safety(canonical_registry)
 
     pass
+'''

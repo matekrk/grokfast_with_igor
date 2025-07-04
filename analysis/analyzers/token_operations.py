@@ -3,7 +3,8 @@ import torch
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 
-from analysis.core.circuit_schema import Circuit, Element, Connection, ElementType, ConnectionType, CircuitType
+from analysis.core.circuit_schema import (Circuit, Element, Connection, ElementType,
+                                          ConnectionType, CircuitType)
 
 
 class TokenOperationDetector:
