@@ -408,6 +408,7 @@ class AdaptiveTokenOperationDetector(TokenOperationDetector):
                 print(f"📊 Threshold update @ epoch {epoch}: {old_phase} → {self.threshold_manager.current_phase}")
                 self._log_current_thresholds()
 
+
     def manually_switch_threshold_phase(self, phase_name: str):
         """Manually switch to a different threshold phase"""
         if self.threshold_manager:

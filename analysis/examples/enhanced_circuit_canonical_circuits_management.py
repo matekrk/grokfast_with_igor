@@ -11,11 +11,10 @@ from pathlib import Path
 
 # NEW: Import the enhanced system
 from analysis.trainers.train_with_enhanced_canonical_circuits import (
-    train_with_enhanced_circuit_management,
-    get_default_circuit_config,
-    get_aggressive_circuit_config,
-    get_conservative_circuit_config
+    train_with_enhanced_circuit_management
 )
+from analysis.trainers.utils import get_default_circuit_config, get_aggressive_circuit_config, \
+    get_conservative_circuit_config
 
 '''
 def main_training_example():

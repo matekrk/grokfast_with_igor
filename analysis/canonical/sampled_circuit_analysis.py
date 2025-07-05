@@ -13,6 +13,7 @@ import numpy as np
 from analysis.helpers.example_sampler import ExampleSampler
 from analysis.core.canonical_circuit_system import CanonicalCircuitRegistry, CanonicalRegistryAdapter
 from analysis.sampling.fast_subset_sampler import FastCircuitSampler
+from analysis.core.circuit_schema import CircuitMetadata
 
 
 # Create single canonical initialization function
@@ -35,7 +36,8 @@ def create_standard_canonical_system(model, save_dir, logger, eval_loader, thres
 
     # Evolution tracker with unified interface
     from analysis.core.circuit_evolution_tracker import CircuitEvolutionTracker
-    evolution_tracker = CircuitEvolutionTracker(circuit_metadata=model.circuit_metadata,)
+    evolution_tracker = CircuitEvolutionTracker(circuit_metadata=
+                                                enhanced_registry.circuit_metadata)
 
     # Standard detector - ALWAYS use CanonicalAwareAdaptiveTokenOperationDetector
     from analysis.analyzers.adaptive_token_operations import CanonicalAwareAdaptiveTokenOperationDetector
