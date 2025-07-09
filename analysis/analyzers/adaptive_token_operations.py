@@ -1,360 +1,287 @@
 # analysis/analyzers/adaptive_token_operations.py
 from collections import defaultdict
-from typing import Dict, List, Tuple, Any
+from typing import Dict, Any, List
 
 import numpy as np
 import torch
 
-from analysis.analyzers.token_operations import TokenOperationDetector
+from analysis import Circuit, Element, ElementType, Connection, ConnectionType, CircuitType
 from analysis.core import CanonicalCircuitRegistry, CanonicalRegistryAdapter
 from analysis.core.circuit_schema import (Circuit)
 from analysis.core.dynamic_thresholds import DynamicThresholdManager
 
 
-class Obsolete_AdaptiveTokenOperationDetector_obsolete(TokenOperationDetector):
-    """Enhanced token operation detector with adaptive thresholds and content-awareness"""
+class TokenOperationDetector:
+    """Detector for common token-level operations in transformer models"""
 
-    def __init__(self, model, registry=None, thresholds=None, content_analyzer=None):
-        super().__init__(model, registry)
-
+    def __init__(self, model, registry=None):
         self.model = model
         self.registry = registry
-        self.thresholds = thresholds
-        # Content-aware analysis
-        if content_analyzer is None:
-            from analysis.analyzers.content_aware_circuit_analyzer import ContentAwareCircuitAnalyzer
-            self.content_analyzer = ContentAwareCircuitAnalyzer(model)
-        else:
-            self.content_analyzer = content_analyzer
 
-        # Track circuit history for stability analysis
-        self.circuit_history = defaultdict(list)
-        self.false_positive_patterns = set()
+    def detect_copy_mechanisms(self, attention_patterns: Dict[str, torch.Tensor],
+                               threshold: float = 0.8) -> List[Dict[str, Any]]:
+        """
+        Detect heads that perform token copying operations
 
-        # Threshold handling
-        if self.thresholds is None:
-            # Create default thresholds if none provided
-            from analysis.core.circuit_thresholds import CircuitThresholds
-            self.thresholds = CircuitThresholds()
-            print("⚠️  No thresholds provided, using default CircuitThresholds")
-        print("✅ Adaptive token operation detector initialized")
+        Args:
+            attention_patterns: Dictionary mapping head names to attention patterns
+            threshold: Minimum attention weight to consider as copying
 
-    def get_adaptive_threshold(self, operation_type: str, epoch: int,
-                               total_epochs: int, model_accuracy: float) -> float:
-        """Get adaptive threshold for specific operation type"""
-        if self.thresholds:
-            return self.thresholds.get_threshold(operation_type, epoch, total_epochs, model_accuracy)
-        else:
-            # Fallback to static thresholds
-            static_thresholds = {
-                "copy": 0.8,
-                "induction": 0.7,
-                "component": 0.6
-            }
-            return static_thresholds.get(operation_type, 0.7)
-
-
-    def detect_copy_mechanisms_adaptive(self,
-                                        attention_patterns: Dict[str, torch.Tensor],
-                                        tokens: List[str] = None,
-                                        epoch: int = 0,
-                                        total_epochs: int = 1000,
-                                        model_accuracy: float = 0.0,
-                                        content_aware: bool = True) -> List[Dict[str, Any]]:
-        """Enhanced copy detection with proper threshold and content analysis"""
-
-        # Get adaptive threshold
-        threshold = self.get_adaptive_threshold("copy", epoch, total_epochs, model_accuracy)
-
+        Returns:
+            List of copying mechanisms with metadata
+        """
         copy_mechanisms = []
 
         for head_name, pattern in attention_patterns.items():
+            # Convert to numpy for easier analysis
             if isinstance(pattern, torch.Tensor):
                 pattern = pattern.detach().cpu().numpy()
 
+            # For each query position, find positions it attends to strongly
             for query_pos in range(pattern.shape[0]):
-                for key_pos in range(query_pos):  # Causal attention only
-                    attention_strength = pattern[query_pos, key_pos]
-
-                    if attention_strength > threshold:
-                        # Basic copy detection
-                        copy_candidate = {
+                for key_pos in range(query_pos):  # Only look at previous positions
+                    if pattern[query_pos, key_pos] > threshold:
+                        # Found potential copy mechanism
+                        copy_mechanisms.append({
                             "head": head_name,
                             "source_pos": key_pos,
                             "target_pos": query_pos,
-                            "attention_strength": float(attention_strength),
-                            "type": "copy",
-                            "epoch_detected": epoch,
-                            "detection_threshold": threshold
-                        }
-
-                        # Enhanced content-aware analysis
-                        if content_aware and tokens and len(tokens) > max(query_pos, key_pos):
-                            content_analysis = self._enhanced_content_analysis(
-                                tokens, key_pos, query_pos, attention_strength
-                            )
-                            copy_candidate.update(content_analysis)
-
-                        # Calculate reliability score
-                        reliability = self._calculate_copy_reliability(
-                            copy_candidate, epoch, attention_strength, threshold
-                        )
-                        copy_candidate["reliability"] = reliability
-
-                        # Only include if reliability meets minimum standards
-                        min_reliability = 0.3 if epoch < 100 else 0.2  # More lenient later in training
-                        if reliability > min_reliability:
-                            copy_mechanisms.append(copy_candidate)
+                            "strength": float(pattern[query_pos, key_pos]),
+                            "type": "copy"
+                        })
 
         return copy_mechanisms
 
-    def _enhanced_content_analysis(self, tokens: List[str], source_pos: int,
-                                   target_pos: int, attention_strength: float) -> Dict[str, Any]:
-        """Enhanced content analysis using ContentAwareCircuitAnalyzer"""
-
-        # Analyze source context
-        source_context = self.content_analyzer._analyze_token_context(tokens, source_pos)
-        target_context = self.content_analyzer._analyze_token_context(tokens, target_pos)
-
-        # Analyze copy pattern
-        target_context_tokens = tokens[max(0, target_pos - 2):target_pos + 3]
-        copy_analysis = self.content_analyzer._analyze_generic_copy(
-            tokens[source_pos], target_context_tokens, attention_strength
-        )
-
-        # Calculate semantic strength
-        semantic_strength = self.content_analyzer.analyze_copy_semantic_strength(
-            {
-                "source_pos": source_pos,
-                "target_pos": target_pos,
-                "attention_strength": attention_strength
-            },
-            tokens
-        )
-
-        return {
-            "source_context": source_context,
-            "target_context": target_context,
-            "copy_analysis": copy_analysis,
-            "semantic_strength": semantic_strength,
-            "copy_type": copy_analysis["copy_type"],
-            "content_strength": copy_analysis["confidence"],
-            "source_token": tokens[source_pos],
-            "target_context_tokens": target_context_tokens
-        }
-
-    def detect_induction_patterns_adaptive(self,
-                                           attention_patterns: Dict[str, torch.Tensor],
-                                           tokens: List[str] = None,
-                                           epoch: int = 0,
-                                           total_epochs: int = 1000,
-                                           model_accuracy: float = 0.0) -> List[Dict[str, Any]]:
+    def detect_induction_patterns(self, attention_patterns: Dict[str, torch.Tensor],
+                                  threshold: float = 0.7) -> List[Dict[str, Any]]:
         """
-        Detect induction patterns with adaptive thresholds
+        Identify induction heads (if A followed by B previously, predict B after A now)
+
+        Args:
+            attention_patterns: Dictionary mapping head names to attention patterns
+            threshold: Minimum attention weight to consider as induction
+
+        Returns:
+            List of induction mechanisms with metadata
         """
-        if self.thresholds is None:
-            return self.detect_induction_patterns(attention_patterns, threshold=0.7)
-
-        threshold = self.thresholds.get_threshold("induction", epoch, total_epochs, model_accuracy)
-
         induction_patterns = []
 
         for head_name, pattern in attention_patterns.items():
+            # Convert to numpy for easier analysis
             if isinstance(pattern, torch.Tensor):
                 pattern = pattern.detach().cpu().numpy()
 
+            # Induction typically has a specific pattern:
+            # For token sequence [A, B, ..., A], the second A attends to the first A
+
+            # Check sequence length
             seq_len = pattern.shape[0]
-            if seq_len < 4:
+            if seq_len < 4:  # Need at least [A, B, ..., A] for induction
                 continue
 
-            for query_pos in range(2, seq_len):
+            # Look for positions that attend strongly to earlier positions
+            for query_pos in range(2, seq_len):  # Start from 3rd position
                 max_attended_pos = np.argmax(pattern[query_pos, :query_pos])
 
+                # Check if attention is strong enough
                 if pattern[query_pos, max_attended_pos] > threshold:
+                    # Check for induction pattern: look at the next position after max_attended_pos
                     next_after_attended = max_attended_pos + 1
                     if next_after_attended < query_pos:
-                        induction_candidate = {
+                        induction_patterns.append({
                             "head": head_name,
                             "inducer_pos": max_attended_pos,
                             "induced_pos": next_after_attended,
                             "target_pos": query_pos,
                             "strength": float(pattern[query_pos, max_attended_pos]),
-                            "type": "induction",
-                            "epoch_detected": epoch,
-                            "detection_threshold": threshold
-                        }
-
-                        # Calculate reliability
-                        reliability = self._calculate_induction_reliability(
-                            induction_candidate, epoch, tokens
-                        )
-                        induction_candidate["reliability"] = reliability
-
-                        if reliability > 0.3:
-                            induction_patterns.append(induction_candidate)
+                            "type": "induction"
+                        })
 
         return induction_patterns
 
-    def _analyze_copy_content(self, tokens: List[str], source_pos: int, target_pos: int,
-                              attention_strength: float) -> Tuple[str, float]:
-        """Analyze what type of copying based on token content"""
-        if source_pos >= len(tokens) or target_pos >= len(tokens):
-            return "positional_only", attention_strength
+    def create_token_operation_circuit(self, operation_data: Dict[str, Any],
+                                       tokens: List[str], epoch: int) -> Circuit:
+        """Convert an operation detection result into a formal circuit"""
+        op_type = operation_data["type"]
 
-        source_token = tokens[source_pos]
-
-        # Check for exact token copying
-        if target_pos < len(tokens) - 1:
-            next_token = tokens[target_pos + 1]
-            if source_token == next_token:
-                return "exact_token_copy", attention_strength * 1.2
-
-        # Check for pattern completion (A B ... A -> B)
-        if source_pos < len(tokens) - 1:
-            source_next = tokens[source_pos + 1]
-            if target_pos < len(tokens) - 1:
-                target_next = tokens[target_pos + 1]
-                if source_next == target_next:
-                    return "pattern_completion", attention_strength * 1.1
-
-        # Check for content similarity
-        content_similarity = self._calculate_token_similarity(source_token, tokens[target_pos])
-        if content_similarity > 0.7:
-            return "content_similar", attention_strength * (0.8 + 0.4 * content_similarity)
-
-        return "positional_only", attention_strength * 0.9
-
-    def _calculate_token_similarity(self, token1: str, token2: str) -> float:
-        """Calculate similarity between tokens"""
-        if token1 == token2:
-            return 1.0
-
-        # Check if both are numbers
-        try:
-            float(token1)
-            float(token2)
-            return 0.8
-        except:
-            pass
-
-        # Same length similarity
-        if len(token1) == len(token2):
-            return 0.5
-
-        return 0.1
-
-    def _calculate_copy_reliability(self, copy_candidate: Dict, epoch: int,
-                                    attention_strength: float, threshold: float) -> float:
-        """Calculate reliability score for copy mechanism"""
-        # Base reliability from attention strength
-        attention_margin = (attention_strength - threshold) / (1.0 - threshold)
-        base_reliability = min(1.0, attention_margin * 2.0)
-
-        # Training stage factor
-        if epoch < 50:
-            stage_factor = 0.5
-        elif epoch < 200:
-            stage_factor = 0.7
-        elif epoch < 500:
-            stage_factor = 0.9
+        if op_type == "copy":
+            return self._create_copy_circuit(operation_data, tokens, epoch)
+        elif op_type == "induction":
+            return self._create_induction_circuit(operation_data, tokens, epoch)
         else:
-            stage_factor = 1.0
+            raise ValueError(f"Unknown operation type: {op_type}")
 
-        # Historical consistency
-        pattern = f"{copy_candidate['head']}_{copy_candidate['source_pos']}_{copy_candidate['target_pos']}"
+    def _create_copy_circuit(self, operation_data: Dict[str, Any],
+                             tokens: List[str], epoch: int) -> Circuit:
+        """Create a circuit representing a copy operation"""
+        head = operation_data["head"]
+        source_pos = operation_data["source_pos"]
+        target_pos = operation_data["target_pos"]
+        strength = operation_data["strength"]
 
-        if pattern in self.circuit_history:
-            epochs_seen = len(self.circuit_history[pattern])
-            consistency_factor = min(1.0, epochs_seen / 5.0)
-        else:
-            consistency_factor = 0.5
-            self.circuit_history[pattern] = [epoch]
+        # Create unique circuit ID
+        # circuit_id = f"copy_{head}_{source_pos}_{target_pos}_{epoch}"
+        circuit_id = self.registry.get_circuit_id(
+            operation_type="copy",
+            component_info=head,
+            epoch=epoch,
+            source_pos=source_pos,
+            target_pos=target_pos,
+            relative_offset= target_pos - source_pos,
+            source="individual",
+            consistency=1)
 
-        # Content boost
-        content_factor = 1.0
-        if "copy_type" in copy_candidate:
-            copy_type = copy_candidate["copy_type"]
-            if copy_type == "exact_token_copy":
-                content_factor = 1.3
-            elif copy_type == "pattern_completion":
-                content_factor = 1.2
-            elif copy_type == "content_similar":
-                content_factor = 1.1
+        # Create elements for source and target tokens
+        source_token = Element(
+            id=f"token_{source_pos}",
+            type=ElementType.TOKEN,
+            properties={"position": source_pos, "token": tokens[source_pos]}
+        )
 
-        reliability = base_reliability * stage_factor * consistency_factor * content_factor
-        return min(1.0, reliability)
+        target_token = Element(
+            id=f"token_{target_pos}",
+            type=ElementType.TOKEN,
+            properties={"position": target_pos, "token": tokens[target_pos]}
+        )
 
-    def _calculate_induction_reliability(self, induction_candidate: Dict, epoch: int,
-                                         tokens: List[str] = None) -> float:
-        """Calculate reliability for induction patterns"""
-        base_strength = induction_candidate["strength"]
+        # Create element for the attention head
+        attention_head = Element(
+            id=head,
+            type=ElementType.HEAD,
+            properties={"name": head}
+        )
 
-        # Training stage factor
-        if epoch < 100:
-            stage_factor = 0.4  # Induction heads emerge later
-        elif epoch < 300:
-            stage_factor = 0.7
-        else:
-            stage_factor = 1.0
+        # Create connections
+        source_to_head = Connection(
+            source=source_token.id,
+            target=attention_head.id,
+            strength=strength,
+            type=ConnectionType.ATTENTION,
+            properties={"operation": "read"}
+        )
 
-        # Pattern consistency
-        pattern = f"{induction_candidate['head']}_induction"
-        if pattern in self.circuit_history:
-            consistency_factor = min(1.0, len(self.circuit_history[pattern]) / 3.0)
-        else:
-            consistency_factor = 0.5
-            self.circuit_history[pattern] = [epoch]
+        head_to_target = Connection(
+            source=attention_head.id,
+            target=target_token.id,
+            strength=strength,
+            type=ConnectionType.ATTENTION,
+            properties={"operation": "write"}
+        )
 
-        return base_strength * stage_factor * consistency_factor
+        # Create the circuit
+        circuit = Circuit(
+            id=circuit_id,
+            type=CircuitType.TOKEN,
+            elements=[source_token, target_token, attention_head],
+            connections=[source_to_head, head_to_target],
+            attribution=strength,
+            metadata={
+                "operation_type": "copy",
+                "head": head,
+                "source_position": source_pos,
+                "target_position": target_pos
+            },
+            discovered_at=epoch
+        )
 
-    def prune_unstable_circuits(self, current_circuits: List[Dict], epoch: int) -> List[Dict]:
-        """Remove circuits that haven't been seen recently"""
-        stable_circuits = []
+        return circuit
 
-        for circuit in current_circuits:
-            circuit_pattern = f"{circuit['head']}_{circuit.get('source_pos', 0)}_{circuit.get('target_pos', 0)}"
+    def _create_induction_circuit(self, operation_data: Dict[str, Any],
+                                  tokens: List[str], epoch: int) -> Circuit:
+        """Create a circuit representing an induction operation"""
+        head = operation_data["head"]
+        inducer_pos = operation_data["inducer_pos"]
+        induced_pos = operation_data["induced_pos"]
+        target_pos = operation_data["target_pos"]
+        strength = operation_data["strength"]
 
-            # Update history
-            if circuit_pattern not in self.circuit_history:
-                self.circuit_history[circuit_pattern] = []
+        # Create unique circuit ID
+        # circuit_id = f"induction_{head}_{inducer_pos}_{induced_pos}_{target_pos}_{epoch}"
+        pattern_distance = target_pos - induced_pos
+        pattern_type = f"dist_{pattern_distance}"
+        circuit_id = self.registry.get_circuit_id(
+            operation_type="induction",
+            component_info=head,
+            epoch=epoch,
+            pattern_type=pattern_type,
+            inducer_pos=inducer_pos,
+            induced_pos=induced_pos,
+            target_pos=target_pos,
+            strength=strength,
+            source="individual",
+            consistency=1)
 
-            if epoch not in self.circuit_history[circuit_pattern]:
-                self.circuit_history[circuit_pattern].append(epoch)
 
-            # Check stability
-            history = self.circuit_history[circuit_pattern]
-            recent_sightings = sum(1 for e in history if epoch - e <= 20)
-            total_sightings = len(history)
+        # Create elements for tokens
+        inducer_token = Element(
+            id=f"token_{inducer_pos}",
+            type=ElementType.TOKEN,
+            properties={"position": inducer_pos, "token": tokens[inducer_pos]}
+        )
 
-            # Stability criteria
-            is_stable = (
-                    total_sightings >= 2 and
-                    recent_sightings >= 1 and
-                    (recent_sightings / total_sightings) > 0.3
-            )
+        induced_token = Element(
+            id=f"token_{induced_pos}",
+            type=ElementType.TOKEN,
+            properties={"position": induced_pos, "token": tokens[induced_pos]}
+        )
 
-            if is_stable:
-                circuit["stability_score"] = recent_sightings / max(1, total_sightings)
-                stable_circuits.append(circuit)
-            else:
-                self.false_positive_patterns.add(circuit_pattern)
+        target_token = Element(
+            id=f"token_{target_pos}",
+            type=ElementType.TOKEN,
+            properties={"position": target_pos, "token": tokens[target_pos]}
+        )
 
-        return stable_circuits
+        # Create element for the attention head
+        attention_head = Element(
+            id=head,
+            type=ElementType.HEAD,
+            properties={"name": head}
+        )
 
-    def get_emergence_timeline(self) -> Dict[str, Any]:
-        """Get timeline of circuit emergence"""
-        emergence_data = {}
+        # Create connections
+        inducer_to_head = Connection(
+            source=inducer_token.id,
+            target=attention_head.id,
+            strength=strength,
+            type=ConnectionType.ATTENTION,
+            properties={"operation": "read"}
+        )
 
-        for pattern, epochs in self.circuit_history.items():
-            if epochs:
-                emergence_data[pattern] = {
-                    "first_seen": min(epochs),
-                    "last_seen": max(epochs),
-                    "total_sightings": len(epochs),
-                    "epochs": sorted(epochs)
-                }
+        head_to_target = Connection(
+            source=attention_head.id,
+            target=target_token.id,
+            strength=strength,
+            type=ConnectionType.ATTENTION,
+            properties={"operation": "write"}
+        )
 
-        return emergence_data
+        # "Induced" connection (the semantic relationship)
+        induced_relation = Connection(
+            source=induced_token.id,
+            target=target_token.id,
+            strength=strength * 0.8,  # Slightly weaker
+            type=ConnectionType.COMPOSITE,
+            properties={"operation": "predict"}
+        )
+
+        # Create the circuit
+        circuit = Circuit(
+            id=circuit_id,
+            type=CircuitType.TOKEN,
+            elements=[inducer_token, induced_token, target_token, attention_head],
+            connections=[inducer_to_head, head_to_target, induced_relation],
+            attribution=strength,
+            metadata={
+                "operation_type": "induction",
+                "head": head,
+                "inducer_position": inducer_pos,
+                "induced_position": induced_pos,
+                "target_position": target_pos
+            },
+            discovered_at=epoch
+        )
+
+        return circuit
 
 
 class AdaptiveTokenOperationDetector(TokenOperationDetector):
@@ -407,7 +334,6 @@ class AdaptiveTokenOperationDetector(TokenOperationDetector):
             if self.threshold_manager.current_phase != old_phase:
                 print(f"📊 Threshold update @ epoch {epoch}: {old_phase} → {self.threshold_manager.current_phase}")
                 self._log_current_thresholds()
-
 
     def manually_switch_threshold_phase(self, phase_name: str):
         """Manually switch to a different threshold phase"""

@@ -3,20 +3,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from analysis import EnhancedCircuitRegistry, CircuitThresholds, ComputationalBudget
+from analysis import CircuitThresholds, ComputationalBudget
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
 from analysis.canonical.sampled_circuit_analysis import run_canonical_circuit_analysis_with_sampling, \
     create_standard_canonical_system
-from analysis.core.canonical_circuit_system import CanonicalCircuitRegistry, FunctionalCircuitSignatureExtractor
-from analysis.core.json_safe_canonical_circuits import JSONSafeCanonicalCircuitRegistry, \
-    JSONSafeCanonicalRegistryAdapter
 from analysis.core.unified_logger import UnifiedLogger
-from analysis.helpers import example_sampler
-from analysis.helpers.example_sampler import create_aggressive_example_sampler
-from analysis.sampling.diversity_enhanced_sampling import analyze_circuit_capacity_limits
 from analysis.trainers.utils import detect_grokking, train_epoch, evaluate
 from analysis.utils.utils import init_train_dataloader_state
-from analysis.visualization.circuit_quality_analyzer import CircuitQualityAnalyzer
 
 
 def get_sampling_configs(eval_loader, num_samples=12):
@@ -207,7 +200,7 @@ def train_with_default_canonical_circuits(
         should_analyze = epoch % analyze_interval == 0 or epoch == epochs - 1
         should_evaluate = epoch % log_interval == 0 or epoch == epochs - 1
 
-        # info evaluate if eval_stats obsolete; whatis check for grokking
+        # info evaluate if eval_stats is not anymore current; whatis check for grokking
         if (should_evaluate or should_analyze) and eval_loader:
             eval_stats = evaluate(model, eval_loader, criterion, device)
             current_accuracy = eval_stats['accuracy']

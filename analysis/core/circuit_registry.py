@@ -430,16 +430,19 @@ class EnhancedCircuitRegistry(CircuitRegistry):
 
     def _should_register_circuit(self, circuit, metadata: CircuitMetadata,
                                  confidence: float) -> bool:
-        """Determine if circuit should be registered based on quality criteria"""
-        # Minimum confidence threshold
+        """info determine if circuit should be registered based on quality criteria"""
+        # info minimum confidence threshold
+
+        # todo add thresholds parameter dict; fixme confidence should probably rise,
+        #  separately for first and second test
         if confidence < 0.3:
             return False
 
-        # Stability requirements - transient circuits need higher confidence
+        # info stability requirements - transient circuits need higher confidence
         if metadata.stability == CircuitStability.TRANSIENT and confidence < 0.7:
             return False
 
-        # For existing circuits, check if this is an improvement
+        # info or existing circuits, check if this is an improvement
         if circuit.id in self.circuits:
             existing_metadata = self.circuit_metadata[circuit.id]
             return (confidence > existing_metadata.detection_confidence or

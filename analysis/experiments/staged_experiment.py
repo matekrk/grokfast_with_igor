@@ -3,9 +3,8 @@ import torch
 from pathlib import Path
 
 from analysis.analyzers.continuous_circuit_tracker import ContinuousCircuitTracker
-from analysis.analyzers.enhanced_phase_analyzer import EnhancedPhaseAnalyzer
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
-from analysis.analyzers.phase_transition_analyzer import PhaseTransitionAnalyzer
+from analysis.analyzers.phase_transition_analyzer import PhaseTransitionAnalyzer, EnhancedPhaseAnalyzer
 from analysis.models.modular_data import create_modular_dataloaders
 from analysis.trainers.analysis import train_with_analysis
 from analysis.trainers.train_phase_analysis import train_with_phase_analysis

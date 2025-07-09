@@ -1,6 +1,6 @@
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Union, List
+from typing import Dict, Union, List, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,8 +9,11 @@ import seaborn as sns
 import torch
 from sklearn.decomposition import PCA
 
+from analysis import CircuitType
 from analysis.core import CanonicalRegistryAdapter
+from analysis.core.unified_logger import UnifiedLogger
 from analysis.utils.utils import get_current_callable_info
+from analysis.core.circuit_schema import (Circuit, Element, ElementType)
 
 
 class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
@@ -21,7 +24,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                  sliding_window_size=5, dense_sampling=True, jump_detection_window=100,
                  jump_threshold=1.0):
         # info initialization code...
-        # info nitialize JSON safety utility
+        # info initialize JSON safety utility
         from analysis.core.json_safe_analyzer import JSONSafeAnalyzer
         self.json_util = JSONSafeAnalyzer()
 
@@ -116,7 +119,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         # info always flatten weights for potential sliding window storage
         flattened = []
         for name, param in self.model.named_parameters():
-            if 'weight' in name:  # info anly consider weight matrices, not biases
+            if 'weight' in name:  # info only consider weight matrices, not biases
                 flattened.append(param.detach().cpu().view(-1))
 
         flattened_vector = torch.cat(flattened).numpy()
@@ -366,7 +369,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
         if not self.pending_jumps:
             return results
 
-        # info store current model to restore after tarining
+        # info store current model to restore after training
         original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
 
         # info get epoch numbers for epochs in jump window
@@ -381,7 +384,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
             # fixme or as below?
             # pre_jump_epoch = pending_jump['pre_jump_epoch']
             # pre_jump_state = pending_jump['pre_jump_state']
-            # info get current snapshot warning get_snapshot() operates only on self.recent_snapshots # a jesli wywolane gdzie indziej???
+            # info get current snapshot warning get_snapshot() operates only on self.recent_snapshots
             jump_snapshot = self.get_snapshot(jump_epoch)
 
             # info reformat pre_ and jump_ snapshots to {'epoch': int, 'state_dict': {dict: 29}} format
@@ -393,7 +396,7 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
             if optimizer is not None:
                 # info load the jump state
                 self.model.load_state_dict(jump_snapshot['state_dict'])
-                # info perform some traing epochs
+                # info perform some training epochs
                 self.model.train()
                 if eval_loader is not None:
                     for _ in range(mini_train_steps):
@@ -937,30 +940,6 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                 "epoch": epoch
             }
         }
-
-
-    def track_feature_directions_evolution(self, epoch, importance_threshold):
-        """Track evolution of feature directions across training"""
-
-        if not hasattr(self, 'feature_direction_history'):
-            self.feature_direction_history = {}
-
-        current_directions = {}
-
-        # Analyze all MLP layers
-        for layer_idx in range(self.model.num_layers):
-            layer_directions = self._extract_layer_feature_directions(layer_idx, importance_threshold)
-            current_directions[layer_idx] = layer_directions
-
-        # Store in history
-        self.feature_direction_history[epoch] = current_directions
-
-        # Analyze evolution patterns
-        evolution_analysis = self._analyze_direction_evolution(epoch)
-
-        return evolution_analysis
-
-
 
     def _check_for_jumps(self, epoch, current_velocity_norm):
         """
@@ -3296,87 +3275,749 @@ class EnhancedWeightSpaceTracker:  # (WeightSpaceTracker):
                 if hasattr(analyzer, 'cleanup'):
                     analyzer.cleanup()
 
+class WeightSpaceSignatureExtractor:
+    """Extracts weight space-specific signatures for canonical circuit registration"""
+
+    def __init__(self):
+        self.signature_type = "weight_space"
+    from analysis.core.circuit_schema import Circuit
+    def extract_circuit_signature(self, circuit: Circuit, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract comprehensive signature for weight space circuit"""
+
+        signature = {
+            'signature_type': self.signature_type,
+            'circuit_type': circuit.type.value if hasattr(circuit.type, 'value') else str(circuit.type),
+            'layer_info': circuit.metadata.get('layer', 'unknown'),
+            'parameter_analysis': self._extract_parameter_signature(circuit),
+            'pattern_classification': self._classify_weight_pattern(circuit),
+            'functional_analysis': self._analyze_functional_role(circuit),
+            'stability_metrics': self._extract_stability_metrics(circuit, context),
+            'detection_context': {
+                'epoch': context.get('epoch', 0),
+                'method': context.get('detection_method', 'unknown'),
+                'confidence': context.get('detection_confidence', 0.5)
+            }
+        }
+
+        return signature
+
+    def _extract_parameter_signature(self, circuit: Circuit) -> Dict[str, Any]:
+        """Extract parameter-related signature components"""
+
+        param_sig = {
+            'sparsity_ratio': circuit.metadata.get('sparsity', 0.0),
+            'magnitude_profile': circuit.metadata.get('magnitude', 0.0),
+            'feature_directions': circuit.metadata.get('feature_direction', {}),
+            'interaction_patterns': circuit.metadata.get('interaction_type', 'unknown'),
+            'affected_parameters': [],
+            'parameter_groups': []
+        }
+
+        # Extract from circuit elements
+        if hasattr(circuit, 'elements'):
+            for element in circuit.elements:
+                if hasattr(element, 'component_data') and element.component_data:
+                    comp_data = element.component_data
+
+                    if 'parameter_name' in comp_data:
+                        param_sig['affected_parameters'].append(comp_data['parameter_name'])
+                    if 'weight_group' in comp_data:
+                        param_sig['parameter_groups'].append(comp_data['weight_group'])
+
+        return param_sig
+
+    def _classify_weight_pattern(self, circuit: Circuit) -> str:
+        """Classify the type of weight pattern detected"""
+
+        # Check metadata for explicit pattern type
+        if 'pattern_type' in circuit.metadata:
+            return circuit.metadata['pattern_type']
+
+        # Infer from circuit type and metadata
+        if circuit.type == CircuitType.SUBSPACE:
+            if 'interaction' in circuit.metadata.get('operation_type', '').lower():
+                return 'feature_interaction'
+            elif circuit.metadata.get('sparsity', 0.0) > 0.5:
+                return 'sparse_feature'
+            else:
+                return 'dense_subspace'
+        elif circuit.type == CircuitType.ATTENTION:
+            return 'attention_weight_pattern'
+        elif circuit.type == CircuitType.MLP:
+            return 'mlp_weight_pattern'
+        else:
+            return 'general_weight_pattern'
+
+    def _analyze_functional_role(self, circuit: Circuit) -> str:
+        """Infer functional role from circuit structure and metadata"""
+
+        # Check for explicit functional indicators
+        metadata = circuit.metadata
+
+        if 'functional_role' in metadata:
+            return metadata['functional_role']
+
+        # Infer from interaction type
+        interaction_type = metadata.get('interaction_type', '')
+        if interaction_type == 'cooperative':
+            return 'feature_amplification'
+        elif interaction_type == 'competitive':
+            return 'feature_selection'
+        elif interaction_type == 'orthogonal':
+            return 'feature_composition'
+
+        # Infer from operation type
+        operation_type = metadata.get('operation_type', '').lower()
+        if 'copy' in operation_type:
+            return 'information_routing'
+        elif 'induction' in operation_type:
+            return 'pattern_completion'
+        elif 'composition' in operation_type:
+            return 'compositional_reasoning'
+
+        # Default based on circuit type
+        if circuit.type == CircuitType.ATTENTION:
+            return 'attention_routing'
+        elif circuit.type == CircuitType.MLP:
+            return 'feature_processing'
+        else:
+            return 'unknown_function'
+
+    def _extract_stability_metrics(self, circuit: Circuit, context: Dict[str, Any]) -> Dict[str, float]:
+        """Extract stability-related metrics"""
+
+        stability = {
+            'detection_confidence': circuit.attribution if hasattr(circuit, 'attribution') else 0.5,
+            'temporal_consistency': context.get('temporal_consistency', 0.0),
+            'cross_example_stability': context.get('cross_example_stability', 0.0),
+            'parameter_stability': context.get('parameter_stability', 0.0),
+            'emergence_confidence': context.get('emergence_confidence', 0.5)
+        }
+
+        return stability
 
 class CanonicalAwareEnhancedWeightSpaceTracker:
     """
-    Canonical-aware wrapper for EnhancedWeightSpaceTracker
-    Delegates analysis to existing implementation, adds canonical registration
+    Enhanced canonical-aware wrapper for EnhancedWeightSpaceTracker
+
+    Improvements over original:
+    - Robust method discovery (no more uncertain if/elif chains)
+    - UnifiedLogger integration
+    - Weight-specific signature extraction
+    - Comprehensive error handling
+    - Registration statistics tracking
+    - Detailed result reporting
     """
 
     def __init__(self, model, enhanced_registry, canonical_adapter: CanonicalRegistryAdapter,
-                 save_dir=None, logger=None, canonical_registry=None,
-                 pca_components=50, snapshot_freq=10,
-                 sliding_window_size=5, dense_sampling=True, jump_detection_window=100,
-                 jump_threshold=1.0):
-        self.canonical_adapter = canonical_adapter
+                 save_dir=None, logger: UnifiedLogger = None, canonical_registry=None,
+                 pca_components=50, snapshot_freq=10, sliding_window_size=5,
+                 dense_sampling=True, jump_detection_window=100, jump_threshold=1.0):
 
-        # ✅ Include existing tracker as a field - delegate to it
-        self.weight_tracker = EnhancedWeightSpaceTracker(model, save_dir=save_dir,
-                                                         canonical_registry=canonical_adapter.canonical_registry,
-                                                         pca_components=pca_components, snapshot_freq=snapshot_freq,
-                                                         sliding_window_size=sliding_window_size,
-                                                         dense_sampling=dense_sampling,
-                                                         jump_detection_window=jump_detection_window,
-                                                         jump_threshold=jump_threshold
-                                                         )
+        # Core components
+        self.model = model
+        self.canonical_adapter = canonical_adapter
+        self.logger = logger  # UnifiedLogger as requested
+
+        # Signature extraction
+        self.signature_extractor = WeightSpaceSignatureExtractor()
+
+        # ✅ Preserve your excellent design: delegate to existing tracker
+        self.weight_tracker = EnhancedWeightSpaceTracker(
+            model=model,
+            save_dir=save_dir,
+            logger=logger,  # Pass UnifiedLogger to underlying tracker
+            canonical_registry=canonical_adapter.canonical_registry,
+            pca_components=pca_components,
+            snapshot_freq=snapshot_freq,
+            sliding_window_size=sliding_window_size,
+            dense_sampling=dense_sampling,
+            jump_detection_window=jump_detection_window,
+            jump_threshold=jump_threshold
+        )
+
+        # Enhanced capabilities
+        self._detection_methods = self._discover_available_methods()
+        self._method_fallback_chain = self._build_fallback_chain()
+
+        # Statistics tracking
+        self.registration_stats = {
+            'total_attempts': 0,
+            'successful_new': 0,
+            'successful_aggregated': 0,
+            'failed_registrations': 0,
+            'methods_used': defaultdict(int),
+            'error_types': defaultdict(int)
+        }
+
+        # Stability tracking for temporal consistency
+        self.circuit_stability_tracker = {}
+
+        if self.logger:
+            self.logger.info(
+                f"Enhanced Weight Space Tracker initialized with methods: {list(self._detection_methods.keys())}")
+
+    def _discover_available_methods(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Robust discovery of available detection methods in underlying tracker
+        and builds prioritezed fallback chain
+        No more uncertain if/elif chains!
+        """
+
+        methods = {}
+
+        # Subspace analysis methods
+        if hasattr(self.weight_tracker, 'analyze_mlp_subspaces_adaptive'):
+            methods['subspace_adaptive'] = {
+                'method_name': 'analyze_mlp_subspaces_adaptive',
+                'requires_layer_iteration': True,
+                'requires_accuracy': True,
+                'priority': 1,
+                'description': 'Adaptive MLP subspace analysis'
+            }
+
+        if hasattr(self.weight_tracker, 'detect_subspace_circuits'):
+            methods['subspace_direct'] = {
+                'method_name': 'detect_subspace_circuits',
+                'requires_layer_iteration': False,
+                'requires_accuracy': False,
+                'priority': 2,
+                'description': 'Direct subspace circuit detection'
+            }
+
+        if hasattr(self.weight_tracker, '_detect_subspace_circuits'):
+            methods['subspace_internal'] = {
+                'method_name': '_detect_subspace_circuits',
+                'requires_layer_iteration': False,
+                'requires_accuracy': False,
+                'priority': 3,
+                'description': 'Internal subspace detection method'
+            }
+
+        # Weight pattern methods
+        if hasattr(self.weight_tracker, 'analyze_weight_patterns'):
+            methods['weight_patterns'] = {
+                'method_name': 'analyze_weight_patterns',
+                'requires_layer_iteration': False,
+                'requires_accuracy': False,
+                'priority': 4,
+                'description': 'Weight pattern analysis'
+            }
+
+        # Feature interaction methods
+        if hasattr(self.weight_tracker, 'detect_feature_interactions'):
+            methods['feature_interactions'] = {
+                'method_name': 'detect_feature_interactions',
+                'requires_layer_iteration': False,
+                'requires_accuracy': False,
+                'priority': 5,
+                'description': 'Feature interaction detection'
+            }
+
+        # Sparsity analysis methods
+        if hasattr(self.weight_tracker, 'analyze_sparsity_patterns'):
+            methods['sparsity_patterns'] = {
+                'method_name': 'analyze_sparsity_patterns',
+                'requires_layer_iteration': False,
+                'requires_accuracy': False,
+                'priority': 6,
+                'description': 'Sparsity pattern analysis'
+            }
+
+        if self.logger:
+            for method_key, method_info in methods.items():
+                self.logger.debug(f"Discovered method '{method_key}': {method_info['description']}")
+
+        return methods
+
+    def _build_fallback_chain(self) -> List[str]:
+        """Build ordered fallback chain based on method priorities"""
+
+        # Sort methods by priority
+        sorted_methods = sorted(
+            self._detection_methods.items(),
+            key=lambda x: x[1]['priority']
+        )
+
+        fallback_chain = [method_key for method_key, _ in sorted_methods]
+
+        if self.logger:
+            self.logger.debug(f"Method fallback chain: {' -> '.join(fallback_chain)}")
+
+        return fallback_chain
 
     def detect_weight_space_circuits(self, epoch: int, model_weights: Dict = None,
-                                     tokens: List[str] = None, **context) -> List[str]:
+                                     tokens: List[str] = None, current_accuracy: float = None,
+                                     **context) -> Dict[str, Any]:
         """
-        Detect weight space circuits using existing implementation + canonical registration
+        Enhanced weight space circuit detection with comprehensive error handling and reporting
+
+        Maintains backward compatibility while providing rich analysis results
         """
-        # ✅ Delegate to your existing implementation
-        if hasattr(self.weight_tracker, 'detect_subspace_circuits'):
-            # Use your existing method that returns circuits
-            existing_circuits = self.weight_tracker._detect_subspace_circuits(
-                layer_data=model_weights, epoch=epoch, **context
+
+        if self.logger:
+            self.logger.info(f"Starting weight space circuit detection at epoch {epoch}")
+            self.logger.debug(f"Context: accuracy={current_accuracy}, tokens={len(tokens or [])}")
+
+        # Initialize comprehensive results
+        results = {
+            'canonical_circuits': [],  # Backward compatible return value
+            'raw_circuits': [],
+            'registration_summary': {
+                'attempted': 0,
+                'succeeded_new': 0,
+                'succeeded_aggregated': 0,
+                'failed': 0
+            },
+            'analysis_summary': {
+                'methods_attempted': [],
+                'methods_succeeded': [],
+                'methods_failed': [],
+                'total_detections': 0,
+                'detection_confidence_avg': 0.0
+            },
+            'performance_metrics': {
+                'detection_time': 0.0,
+                'registration_time': 0.0,
+                'method_performance': {}
+            }
+        }
+
+        # Enhanced context with all available information
+        enhanced_context = {
+            'epoch': epoch,
+            'current_accuracy': current_accuracy,
+            'model_weights': model_weights,
+            'tokens': tokens or [],
+            **context
+        }
+
+        detected_circuits = []
+
+        # Try methods in fallback chain order
+        import time
+        detection_start = time.time()
+
+        for method_key in self._method_fallback_chain:
+            method_info = self._detection_methods[method_key]
+            method_start = time.time()
+
+            try:
+                if self.logger:
+                    self.logger.debug(f"Attempting detection with method: {method_key}")
+
+                results['analysis_summary']['methods_attempted'].append(method_key)
+
+                # Execute detection method
+                method_circuits = self._execute_detection_method(method_key, method_info, enhanced_context)
+
+                if method_circuits:
+                    detected_circuits.extend(method_circuits)
+                    results['analysis_summary']['methods_succeeded'].append(method_key)
+                    self.registration_stats['methods_used'][method_key] += 1
+
+                    method_time = time.time() - method_start
+                    results['performance_metrics']['method_performance'][method_key] = {
+                        'execution_time': method_time,
+                        'circuits_detected': len(method_circuits),
+                        'success': True
+                    }
+
+                    if self.logger:
+                        self.logger.debug(
+                            f"Method {method_key} detected {len(method_circuits)} circuits in {method_time:.3f}s")
+
+                else:
+                    results['performance_metrics']['method_performance'][method_key] = {
+                        'execution_time': time.time() - method_start,
+                        'circuits_detected': 0,
+                        'success': True
+                    }
+
+            except Exception as e:
+                method_time = time.time() - method_start
+                results['analysis_summary']['methods_failed'].append(method_key)
+                self.registration_stats['error_types'][f"{method_key}_error"] += 1
+
+                results['performance_metrics']['method_performance'][method_key] = {
+                    'execution_time': method_time,
+                    'circuits_detected': 0,
+                    'success': False,
+                    'error': str(e)
+                }
+
+                if self.logger:
+                    self.logger.warning(f"Method {method_key} failed: {e}")
+
+                continue
+
+        # Fallback if no methods succeeded
+        if not detected_circuits:
+            if self.logger:
+                self.logger.info("All primary methods failed, attempting basic fallback")
+
+            try:
+                fallback_circuits = self._basic_fallback_detection(enhanced_context)
+                if fallback_circuits:
+                    detected_circuits.extend(fallback_circuits)
+                    results['analysis_summary']['methods_succeeded'].append('basic_fallback')
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Even fallback detection failed: {e}")
+
+        results['performance_metrics']['detection_time'] = time.time() - detection_start
+        results['raw_circuits'] = detected_circuits
+        results['analysis_summary']['total_detections'] = len(detected_circuits)
+
+        # Calculate average detection confidence
+        if detected_circuits:
+            confidences = [
+                getattr(circuit, 'attribution', 0.5) for circuit in detected_circuits
+            ]
+            results['analysis_summary']['detection_confidence_avg'] = sum(confidences) / len(confidences)
+
+        # Register circuits canonically
+        if detected_circuits:
+            registration_start = time.time()
+            canonical_ids = self._register_circuits_with_comprehensive_tracking(
+                circuits=detected_circuits,
+                epoch=epoch,
+                tokens=tokens or [],
+                context=enhanced_context,
+                registration_summary=results['registration_summary']
             )
-        elif hasattr(self.weight_tracker, 'analyze_weight_patterns'):
-            # Or use whatever your existing method is called
-            weight_patterns = self.weight_tracker.analyze_weight_patterns(model_weights)
-            existing_circuits = [self.weight_tracker._create_circuit_from_pattern(p, epoch)
-                                 for p in weight_patterns]
-        elif hasattr(self.weight_tracker, 'analyze_mlp_subspaces_adaptive'):
-            subspace_circuits = []
-            for layer_idx in range(self.model.layers):
-                # fixme how to add current_accuracy and mlp_sparsity to **context?
-                #  info probably it would be enough to call it with that todo check if it works
-                subspace_metrics = self.weight_tracker.analyze_mlp_subspaces_adaptive(
-                    layer_idx=layer_idx, epoch=epoch, logger=self.weight_tracker.logger,
-                    **context
-                )
-                existing_circuits = subspace_metrics['circuits']
-                subspace_circuits.extend(existing_circuits)
-            # ✅ Register each detected circuit through canonical adapter
-            canonical_ids = []
-            for circuit in subspace_circuits:
-                try:
-                    canonical_id, legacy_id = self.canonical_adapter.register_circuit_detection(
-                        circuit=circuit,
-                        epoch=epoch,
-                        tokens=tokens or [],
-                        detection_confidence=circuit.attribution,  # Use circuit's attribution
-                        detection_method="weight_space_analysis",
-                        example_metadata={
-                            'analysis_type': 'weight_space',
-                            'layer_info': circuit.metadata.get('layer', 'unknown'),
-                            'feature_info': circuit.metadata.get('feature_direction', {}),
-                            'sparsity_info': circuit.metadata.get('sparsity', 0.0)
-                        }
-                    )
-                    canonical_ids.append(canonical_id)
-                except Exception as e:
-                    print(f"⚠️ Failed to register circuit {circuit.id}: {e}")
+            results['canonical_circuits'] = canonical_ids
+            results['performance_metrics']['registration_time'] = time.time() - registration_start
+
+        # Update overall statistics
+        self._update_overall_statistics(results)
+
+        if self.logger:
+            summary = results['analysis_summary']
+            reg_summary = results['registration_summary']
+            self.logger.info(f"Detection complete: {summary['total_detections']} circuits detected, "
+                             f"{reg_summary['succeeded_new']} new registrations, "
+                             f"{reg_summary['succeeded_aggregated']} aggregations")
+
+        return results
+
+    def _execute_detection_method(self, method_key: str, method_info: Dict[str, Any],
+                                  context: Dict[str, Any]) -> List[Circuit]:
+        """Execute a specific detection method with proper parameter handling"""
+
+        circuits = []
+        method_name = method_info['method_name']
+        method = getattr(self.weight_tracker, method_name)
+
+        if method_key == 'subspace_adaptive':
+            # Special handling for analyze_mlp_subspaces_adaptive
+            circuits = self._execute_subspace_adaptive_method(method, context)
+
+        elif method_info.get('requires_layer_iteration', False):
+            # Methods that need layer iteration
+            circuits = self._execute_layer_iteration_method(method, context)
+
         else:
-            # Fallback - call any method that returns circuits
-            existing_circuits = []
-            print("⚠️ Please specify the correct method name in EnhancedWeightSpaceTracker")
+            # Direct method execution
+            circuits = self._execute_direct_method(method, method_info, context)
 
+        return circuits
 
-        print(f"📊 Weight space analysis: {len(canonical_ids)} circuits registered canonically")
+    def _execute_subspace_adaptive_method(self, method, context: Dict[str, Any]) -> List[Circuit]:
+        """Execute the analyze_mlp_subspaces_adaptive method with proper layer iteration"""
+
+        circuits = []
+
+        # Determine number of layers
+        num_layers = getattr(self.model, 'n_layers',
+                             getattr(self.model, 'num_layers',
+                                     getattr(self.model, 'config', {}).get('n_layer', 6)))
+
+        for layer_idx in range(num_layers):
+            try:
+                subspace_metrics = method(
+                    layer_idx=layer_idx,
+                    epoch=context['epoch'],
+                    logger=self.logger,
+                    current_accuracy=context.get('current_accuracy', 0.0),
+                    **{k: v for k, v in context.items()
+                       if k not in ['epoch', 'current_accuracy', 'tokens', 'model_weights']}
+                )
+
+                if isinstance(subspace_metrics, dict) and 'circuits' in subspace_metrics:
+                    layer_circuits = subspace_metrics['circuits']
+                    if isinstance(layer_circuits, list):
+                        circuits.extend(layer_circuits)
+
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"Subspace analysis failed for layer {layer_idx}: {e}")
+                continue
+
+        return circuits
+
+    def _execute_layer_iteration_method(self, method, context: Dict[str, Any]) -> List[Circuit]:
+        """Execute methods that require layer iteration"""
+
+        circuits = []
+
+        # Implement layer iteration for other methods if needed
+        # This is a placeholder for methods that might need layer-by-layer processing
+
+        return circuits
+
+    def _execute_direct_method(self, method, method_info: Dict[str, Any],
+                               context: Dict[str, Any]) -> List[Circuit]:
+        """Execute methods that can be called directly"""
+
+        circuits = []
+
+        try:
+            # Prepare arguments based on method requirements
+            method_args = {}
+
+            if method_info.get('requires_accuracy', False):
+                method_args['current_accuracy'] = context.get('current_accuracy', 0.0)
+
+            # Add epoch if method expects it
+            if 'epoch' in method.__code__.co_varnames:
+                method_args['epoch'] = context['epoch']
+
+            # Add model weights if method expects them
+            if 'model_weights' in method.__code__.co_varnames:
+                method_args['model_weights'] = context.get('model_weights')
+
+            # Execute method
+            result = method(**method_args)
+
+            # Handle different return types
+            if isinstance(result, list):
+                circuits = result
+            elif isinstance(result, dict):
+                if 'circuits' in result:
+                    circuits = result['circuits']
+                elif 'detected_circuits' in result:
+                    circuits = result['detected_circuits']
+
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"Direct method execution failed: {e}")
+
+        return circuits
+
+    def _basic_fallback_detection(self, context: Dict[str, Any]) -> List[Circuit]:
+        """Basic fallback detection when all other methods fail"""
+
+        circuits = []
+
+        try:
+            # Create simple circuits based on model parameter statistics
+            for name, param in self.model.named_parameters():
+                if 'weight' in name and param.numel() > 100:
+
+                    # Calculate basic statistics
+                    with torch.no_grad():
+                        weight_data = param.data.detach().cpu()
+                        sparsity = (torch.abs(weight_data) < 1e-6).float().mean().item()
+                        magnitude = torch.norm(weight_data).item()
+
+                        # Create circuit if significant pattern detected
+                        if 0.1 < sparsity < 0.9 and magnitude > 0.1:
+                            circuit = Circuit(
+                                id=f"fallback_{name}_{context['epoch']}",
+                                type=CircuitType.MLP if 'mlp' in name.lower() else CircuitType.ATTENTION,
+                                elements=[Element(
+                                    id=f"fallback_element_{name}",
+                                    type=ElementType.WEIGHT,
+                                    component_data={
+                                        'parameter_name': name,
+                                        'sparsity': sparsity,
+                                        'magnitude': magnitude
+                                    }
+                                )],
+                                connections=[],
+                                attribution=min(1.0, magnitude * (1 - sparsity)),
+                                metadata={
+                                    'parameter_name': name,
+                                    'sparsity': sparsity,
+                                    'magnitude': magnitude,
+                                    'detection_method': 'basic_fallback',
+                                    'layer': self._extract_layer_info(name)
+                                },
+                                discovered_at=context['epoch']
+                            )
+
+                            circuits.append(circuit)
+
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Basic fallback detection failed: {e}")
+
+        return circuits
+
+    def _extract_layer_info(self, param_name: str) -> str:
+        """Extract layer information from parameter name"""
+
+        parts = param_name.split('.')
+        for i, part in enumerate(parts):
+            if any(keyword in part.lower() for keyword in ['layer', 'block']):
+                if i + 1 < len(parts) and parts[i + 1].isdigit():
+                    return f"layer_{parts[i + 1]}"
+        return 'unknown'
+
+    def _register_circuits_with_comprehensive_tracking(self, circuits: List[Circuit], epoch: int,
+                                                       tokens: List[str], context: Dict[str, Any],
+                                                       registration_summary: Dict[str, int]) -> List[str]:
+        """Register circuits with comprehensive tracking and signature extraction"""
+
+        canonical_ids = []
+
+        for circuit in circuits:
+            try:
+                registration_summary['attempted'] += 1
+                self.registration_stats['total_attempts'] += 1
+
+                # Update stability tracking
+                stability_score = self._update_circuit_stability_tracking(circuit.id, epoch)
+
+                # Create signature context
+                signature_context = {
+                    'epoch': epoch,
+                    'detection_method': 'weight_space_analysis',
+                    'detection_confidence': getattr(circuit, 'attribution', 0.5),
+                    'temporal_consistency': stability_score,
+                    'stability_score': stability_score
+                }
+
+                # Extract comprehensive signature
+                circuit_signature = self.signature_extractor.extract_circuit_signature(circuit, signature_context)
+
+                # Register with canonical system
+                canonical_id, legacy_id = self.canonical_adapter.register_circuit_detection(
+                    circuit=circuit,
+                    epoch=epoch,
+                    tokens=tokens,
+                    detection_confidence=signature_context['detection_confidence'],
+                    detection_method="enhanced_weight_space_analysis",
+                    example_metadata={
+                        'analysis_type': 'enhanced_weight_space',
+                        'signature': circuit_signature,
+                        'stability_tracking': {
+                            'temporal_consistency': stability_score,
+                            'detection_history': self.circuit_stability_tracker.get(circuit.id, {})
+                        },
+                        'context': context
+                    }
+                )
+
+                canonical_ids.append(canonical_id)
+
+                # Track registration success type
+                canonical_circuit = self.canonical_adapter.canonical_registry.canonical_circuits.get(canonical_id)
+                if canonical_circuit:
+                    if canonical_circuit.total_detections == 1:
+                        registration_summary['succeeded_new'] += 1
+                        self.registration_stats['successful_new'] += 1
+                    else:
+                        registration_summary['succeeded_aggregated'] += 1
+                        self.registration_stats['successful_aggregated'] += 1
+
+            except Exception as e:
+                registration_summary['failed'] += 1
+                self.registration_stats['failed_registrations'] += 1
+
+                if self.logger:
+                    self.logger.warning(f"Failed to register circuit {circuit.id}: {e}")
+
         return canonical_ids
 
+    def _update_circuit_stability_tracking(self, circuit_id: str, epoch: int) -> float:
+        """Update stability tracking for circuit and return stability score"""
+
+        if circuit_id not in self.circuit_stability_tracker:
+            self.circuit_stability_tracker[circuit_id] = {
+                'first_seen': epoch,
+                'last_seen': epoch,
+                'detection_epochs': [epoch],
+                'stability_score': 0.0
+            }
+        else:
+            tracker = self.circuit_stability_tracker[circuit_id]
+            tracker['last_seen'] = epoch
+            tracker['detection_epochs'].append(epoch)
+
+            # Calculate stability score
+            detection_span = epoch - tracker['first_seen'] + 1
+            detection_frequency = len(tracker['detection_epochs']) / detection_span
+            tracker['stability_score'] = min(1.0, detection_frequency * 2.0)
+
+        return self.circuit_stability_tracker[circuit_id]['stability_score']
+
+    def _update_overall_statistics(self, results: Dict[str, Any]):
+        """Update overall statistics from batch results"""
+
+        # Update method success rates
+        for method in results['analysis_summary']['methods_succeeded']:
+            self.registration_stats['methods_used'][method] += 1
+
+    def get_comprehensive_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive statistics about detection and registration performance"""
+
+        stats = {
+            'registration_stats': self.registration_stats.copy(),
+            'method_performance': dict(self.registration_stats['methods_used']),
+            'error_analysis': dict(self.registration_stats['error_types']),
+            'stability_tracking': {
+                'total_tracked_circuits': len(self.circuit_stability_tracker),
+                'stable_circuits': sum(1 for tracker in self.circuit_stability_tracker.values()
+                                       if tracker['stability_score'] > 0.7),
+                'average_stability': (sum(tracker['stability_score']
+                                          for tracker in self.circuit_stability_tracker.values()) /
+                                      len(self.circuit_stability_tracker)
+                                      if self.circuit_stability_tracker else 0.0)
+            },
+            'detection_capabilities': {
+                'available_methods': list(self._detection_methods.keys()),
+                'fallback_chain': self._method_fallback_chain,
+                'signature_extraction_enabled': True,
+                'stability_tracking_enabled': True
+            }
+        }
+
+        # Calculate success rates
+        total_attempts = stats['registration_stats']['total_attempts']
+        if total_attempts > 0:
+            stats['registration_stats']['success_rate'] = (
+                    (stats['registration_stats']['successful_new'] +
+                     stats['registration_stats']['successful_aggregated']) / total_attempts
+            )
+            stats['registration_stats']['new_circuit_rate'] = (
+                    stats['registration_stats']['successful_new'] / total_attempts
+            )
+
+        return stats
+
+    def get_detection_method_info(self) -> Dict[str, Any]:
+        """Get detailed information about available detection methods"""
+
+        return {
+            'discovered_methods': self._detection_methods.copy(),
+            'fallback_chain': self._method_fallback_chain,
+            'method_capabilities': {
+                method_key: {
+                    'available': True,
+                    'description': method_info['description'],
+                    'priority': method_info['priority'],
+                    'requirements': {
+                        'layer_iteration': method_info.get('requires_layer_iteration', False),
+                        'accuracy_input': method_info.get('requires_accuracy', False)
+                    }
+                }
+                for method_key, method_info in self._detection_methods.items()
+            }
+        }
+
+    # ✅ Preserve your excellent delegation pattern
     def __getattr__(self, name):
         """Delegate any other method calls to the existing tracker"""
         return getattr(self.weight_tracker, name)
-

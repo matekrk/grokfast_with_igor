@@ -13,17 +13,17 @@ Key Features:
 - Easy integration with existing tracker/registry
 """
 
-from typing import Dict, List, Tuple, Any, Optional, Set
-from collections import defaultdict, deque
-from pathlib import Path
-import numpy as np
+from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Tuple, Any, Optional, Set
+
+import numpy as np
 
 # Import the fixed core analyzer
 from analysis.core.circuit_evolution_analyzer import CircuitEvolutionAnalyzer
 from analysis.core.circuit_schema import (
-    EmergencePhase, EvolutionPattern, LearningPhase, InteractionType,
-    CircuitLevel, GrokkingPhase, CircuitType, InteractionEvent
+    InteractionType, EmergencePattern, InteractionEvent, CircuitInteractionType
 )
 
 
@@ -72,24 +72,38 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
     - Grokking transition analysis
     """
 
-    def __init__(self, evolution_tracker=None, enhanced_registry=None, storage_dir: Path = None):
+    def __init__(self, evolution_tracker=None, enhanced_registry=None,
+                 logger=None, storage_dir: Path = None):
         """Initialize with all existing functionality plus emergence analysis"""
         # Initialize parent class
         super().__init__(evolution_tracker, enhanced_registry, storage_dir)
 
-        # Add emergence-specific analysis components
+        # 🆕 ADD: UnifiedLogger for proper logging
+        if logger is not None:
+            self.logger = logger
+        else:
+            from analysis.core.unified_logger import UnifiedLogger
+            self.logger = UnifiedLogger("TemporalEmergenceAnalyzer")
+
+        # Original temporal emergence components
         self.emergence_cascades: Dict[str, EmergenceCascade] = {}
         self.dependency_chains: Dict[str, DependencyChain] = {}
         self.temporal_patterns: Dict[str, Any] = {}
         self.grokking_transitions: Dict[str, Dict[str, Any]] = {}
 
+        # 🆕 MOVED: Components from CircuitEmergenceAnalyzer
+        self.emergence_patterns: Dict[str, EmergencePattern] = {}
+        self.prerequisite_map: Dict[str, Set[str]] = defaultdict(set)
+        self.dependency_strengths: Dict[Tuple[str, str], float] = {}
+
         # Analysis caches for performance
         self._emergence_order_cache: Optional[List[Tuple[str, int]]] = None
         self._dependency_graph_cache: Optional[Dict[str, Set[str]]] = None
 
-        print("✅ Temporal Circuit Emergence Analyzer initialized")
-        print("   📊 Core evolution analysis available")
-        print("   📊 Specialized emergence analysis added")
+        self.logger.info("Enhanced Temporal Circuit Emergence Analyzer initialized")
+        self.logger.info("✅ Core evolution analysis available")
+        self.logger.info("✅ Specialized emergence analysis added")
+        self.logger.info("✅ Dependency tracking integrated")
 
     # ============================================================================
     # EMERGENCE PATTERN ANALYSIS - New Specialized Methods
@@ -116,57 +130,73 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
 
         self._emergence_order_cache = emergence_order
 
-        print(f"📊 Emergence order tracked: {len(emergence_order)} circuits")
+        self.logger.info(f"📊 Emergence order tracked: {len(emergence_order)} circuits")
         return emergence_order
 
-    def detect_emergence_cascades(self, cascade_window: int = 10) -> Dict[str, EmergenceCascade]:
-        """
-        Detect cascades where one circuit emergence triggers others
-
-        Args:
-            cascade_window: Epoch window to consider for cascade detection
-        """
-        emergence_order = self.track_emergence_order()
+    def identify_emergence_cascades(self, canonical_registry,
+                                    interaction_events: List[InteractionEvent]) -> Dict[str, EmergenceCascade]:
+        """Identify cascades where one circuit triggers formation of others"""
         cascades = {}
+        emergence_order = self.track_emergence_order()
 
-        for i, (trigger_circuit, trigger_epoch) in enumerate(emergence_order):
-            # Look for circuits that emerged shortly after this one
-            enabled_circuits = []
+        # Group circuits by emergence epoch windows
+        epoch_windows = defaultdict(list)
+        window_size = 5  # Epochs
 
-            for j in range(i + 1, len(emergence_order)):
-                other_circuit, other_epoch = emergence_order[j]
+        for circuit_id, epoch in emergence_order:
+            window = epoch // window_size
+            epoch_windows[window].append((circuit_id, epoch))
 
-                # If within cascade window, consider it part of cascade
-                if other_epoch <= trigger_epoch + cascade_window:
-                    enabled_circuits.append((other_circuit, other_epoch))
-                else:
-                    break  # Outside window
+        # Analyze each window for cascade patterns
+        for window, circuits in epoch_windows.items():
+            if len(circuits) < 2:
+                continue
 
-            # Only create cascade if there are enabled circuits
-            if enabled_circuits:
-                cascade_id = f"cascade_{trigger_circuit}_{trigger_epoch}"
-                temporal_span = max([epoch for _, epoch in enabled_circuits]) - trigger_epoch
+            # Sort by epoch within window
+            circuits.sort(key=lambda x: x[1])
 
-                cascade = EmergenceCascade(
-                    cascade_id=cascade_id,
-                    trigger_circuit=trigger_circuit,
-                    trigger_epoch=trigger_epoch,
-                    enabled_circuits=enabled_circuits,
-                    cascade_strength=len(enabled_circuits) / cascade_window,
-                    temporal_span=temporal_span,
-                    cascade_type=self._classify_cascade_type(enabled_circuits, trigger_epoch)
-                )
+            # Find potential trigger circuits (earliest in window)
+            trigger_candidates = circuits[:len(circuits) // 3 + 1]
 
-                cascades[cascade_id] = cascade
+            for trigger_circuit, trigger_epoch in trigger_candidates:
+                cascade = self._analyze_potential_cascade(trigger_circuit, trigger_epoch,
+                                                          circuits, interaction_events)
+                if cascade and len(cascade.enabled_circuits) > 0:
+                    cascades[cascade.cascade_id] = cascade
 
         self.emergence_cascades = cascades
-
-        print(f"🌊 Emergence cascades detected: {len(cascades)}")
-        for cascade_id, cascade in cascades.items():
-            print(f"   {cascade_id}: {len(cascade.enabled_circuits)} circuits, "
-                  f"rate: {cascade.get_cascade_rate():.3f}")
-
         return cascades
+
+    def _classify_emergence_pattern(self, circuit_id: str, epoch: int,
+                                    all_events: List[Tuple[str, int]], index: int) -> EmergencePattern:
+        """Classify the emergence pattern for a circuit"""
+        # Look at temporal context
+        window_size = 10
+        start_idx = max(0, index - window_size)
+        end_idx = min(len(all_events), index + window_size + 1)
+
+        nearby_events = all_events[start_idx:end_idx]
+        nearby_epochs = [e[1] for e in nearby_events]
+
+        if len(nearby_epochs) < 3:
+            return EmergencePattern.SUDDEN
+
+        # Calculate local emergence density
+        epoch_range = max(nearby_epochs) - min(nearby_epochs)
+        if epoch_range == 0:
+            return EmergencePattern.SUDDEN
+
+        density = len(nearby_events) / epoch_range
+
+        # Classify based on density and position
+        if density > 0.5:
+            return EmergencePattern.CASCADING
+        elif index < len(all_events) * 0.3:
+            return EmergencePattern.GRADUAL
+        elif index > len(all_events) * 0.7:
+            return EmergencePattern.REINFORCING
+        else:
+            return EmergencePattern.SUDDEN
 
     def _classify_cascade_type(self, enabled_circuits: List[Tuple[str, int]], trigger_epoch: int) -> str:
         """Classify the type of emergence cascade"""
@@ -247,12 +277,70 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
 
         self.dependency_chains = chains
 
-        print(f"🔗 Dependency chains analyzed: {len(chains)}")
+        self.logger.info(f"🔗 Dependency chains analyzed: {len(chains)}")
         for chain_id, chain in chains.items():
-            print(f"   {chain_id}: {len(chain.circuits)} circuits, "
+            self.logger.info(f"   {chain_id}: {len(chain.circuits)} circuits, "
                   f"rate: {chain.get_formation_rate():.3f}")
 
         return chains
+
+    def build_dependency_graph(self, canonical_registry,
+                               interaction_events: List[InteractionEvent]) -> Dict[str, Set[str]]:
+        """Build complete dependency graph from interaction events"""
+        if self._dependency_graph_cache is not None:
+            return self._dependency_graph_cache
+
+        dependency_graph = defaultdict(set)
+
+        # Add dependencies from interaction events
+        for event in interaction_events:
+            if event.event_type == CircuitInteractionType.PREREQUISITE:
+                dependency_graph[event.source_circuit].add(event.target_circuit)
+            elif event.event_type == CircuitInteractionType.ENABLES:
+                dependency_graph[event.source_circuit].add(event.target_circuit)
+
+        # Add temporal dependencies (earlier circuits may enable later ones)
+        emergence_order = self.track_emergence_order()
+        circuit_epochs = {circuit_id: epoch for circuit_id, epoch in emergence_order}
+
+        for circuit_id, epoch in emergence_order:
+            # Find earlier circuits that might be prerequisites
+            for other_id, other_epoch in emergence_order:
+                if other_epoch < epoch and other_epoch >= epoch - 10:  # Within reasonable window
+                    # Check for interaction evidence
+                    interaction_strength = self._calculate_interaction_strength(
+                        other_id, circuit_id, interaction_events)
+                    if interaction_strength > 0.3:
+                        dependency_graph[other_id].add(circuit_id)
+
+        self._dependency_graph_cache = dict(dependency_graph)
+        return self._dependency_graph_cache
+
+    def _calculate_interaction_strength(self, source: str, target: str,
+                                        interaction_events: List[InteractionEvent]) -> float:
+        """Calculate interaction strength between two circuits"""
+        total_strength = 0.0
+        count = 0
+
+        for event in interaction_events:
+            if event.source_circuit == source and event.target_circuit == target:
+                total_strength += event.interaction_strength
+                count += 1
+
+        return total_strength / count if count > 0 else 0.0
+
+
+    def calculate_dependency_strength(self, source_circuit: str, target_circuit: str) -> float:
+        """
+        🆕 MOVED: Calculate strength of dependency relationship
+        Originally from CircuitEmergenceAnalyzer
+        """
+        base_strength = self.dependency_strengths.get((source_circuit, target_circuit), 0.0)
+
+        # TODO: Add more sophisticated strength calculation
+        # Could include temporal proximity, functional similarity, etc.
+
+        return base_strength * 0.8  # Placeholder adjustment
 
     def _classify_chain_type(self, circuits: List[str], epochs: List[int]) -> str:
         """Classify the type of dependency chain"""
@@ -273,75 +361,119 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
         else:
             return "hierarchical"
 
+
     # ============================================================================
     # GROKKING TRANSITION ANALYSIS - Specialized Methods
     # ============================================================================
 
-    def analyze_grokking_transitions(self, accuracy_history: List[float]) -> Dict[str, Any]:
-        """
-        Analyze how circuit emergence relates to grokking transitions
+    def analyze_grokking_transitions(self, circuit_history: Dict[str, List[Any]]) -> Dict[str, Dict[str, Any]]:
+        """Analyze circuit behavior during grokking transitions"""
+        grokking_analysis = {}
 
-        Args:
-            accuracy_history: Training accuracy over epochs
-        """
-        grokking_transitions = {}
+        for circuit_id, history in circuit_history.items():
+            if not history:
+                continue
 
-        # Detect grokking points
-        grokking_epochs = self._detect_grokking_epochs(accuracy_history)
+            # Extract strength trajectory
+            epochs = [item.get('epoch', 0) for item in history]
+            strengths = [item.get('strength', 0.0) for item in history]
 
-        for grok_epoch in grokking_epochs:
-            # Analyze circuit changes around grokking
-            pre_grok_circuits = self._get_circuits_in_window(grok_epoch - 20, grok_epoch)
-            post_grok_circuits = self._get_circuits_in_window(grok_epoch, grok_epoch + 20)
+            if len(epochs) < 10:  # Need sufficient data
+                continue
 
-            transition_analysis = {
-                'grokking_epoch': grok_epoch,
-                'pre_grokking_circuits': pre_grok_circuits,
-                'post_grokking_circuits': post_grok_circuits,
-                'circuit_emergence_rate_change': self._calculate_emergence_rate_change(
-                    pre_grok_circuits, post_grok_circuits
-                ),
-                'new_circuit_types': self._identify_new_circuit_types(
-                    pre_grok_circuits, post_grok_circuits
-                ),
-                'circuit_transformations': self._analyze_circuit_transformations(
-                    grok_epoch, pre_grok_circuits, post_grok_circuits
-                )
+            # Detect grokking transition
+            transition_info = self._detect_grokking_transition(epochs, strengths)
+
+            # Analyze pre/post grokking behavior
+            pre_grok_analysis = self._analyze_pre_grokking(epochs, strengths, transition_info)
+            post_grok_analysis = self._analyze_post_grokking(epochs, strengths, transition_info)
+
+            grokking_analysis[circuit_id] = {
+                'transition_detected': transition_info['detected'],
+                'transition_epoch': transition_info.get('epoch'),
+                'transition_strength': transition_info.get('strength_change'),
+                'pre_grokking': pre_grok_analysis,
+                'post_grokking': post_grok_analysis,
+                'grokking_acceleration': transition_info.get('acceleration', 0.0)
             }
 
-            grokking_transitions[f"grokking_{grok_epoch}"] = transition_analysis
+        self.grokking_transitions = grokking_analysis
+        return grokking_analysis
 
-        self.grokking_transitions = grokking_transitions
+    def _detect_grokking_transition(self, epochs: List[int], strengths: List[float]) -> Dict[str, Any]:
+        """Detect grokking transition point using strength trajectory analysis"""
+        if len(strengths) < 10:
+            return {'detected': False}
 
-        print(f"🚀 Grokking transitions analyzed: {len(grokking_transitions)}")
-        for transition_id, analysis in grokking_transitions.items():
-            print(f"   {transition_id}: "
-                  f"{len(analysis['pre_grokking_circuits'])} → {len(analysis['post_grokking_circuits'])} circuits")
+        # Calculate derivatives to find acceleration points
+        derivatives = np.gradient(strengths)
+        second_derivatives = np.gradient(derivatives)
 
-        return grokking_transitions
+        # Find points of maximum acceleration (grokking onset)
+        acceleration_threshold = np.std(second_derivatives) * 2
+        significant_accelerations = np.where(second_derivatives > acceleration_threshold)[0]
 
-    def _detect_grokking_epochs(self, accuracy_history: List[float]) -> List[int]:
-        """Detect epochs where grokking occurred"""
-        grokking_epochs = []
+        if len(significant_accelerations) == 0:
+            return {'detected': False}
 
-        if len(accuracy_history) < 20:
-            return grokking_epochs
+        # Find the most significant acceleration point
+        max_acceleration_idx = significant_accelerations[np.argmax(second_derivatives[significant_accelerations])]
 
-        # Look for sudden accuracy improvements
-        for i in range(10, len(accuracy_history) - 10):
-            before_window = accuracy_history[i - 10:i]
-            after_window = accuracy_history[i:i + 10]
+        # Validate transition by checking strength change
+        pre_strength = np.mean(strengths[:max_acceleration_idx])
+        post_strength = np.mean(strengths[max_acceleration_idx:])
+        strength_change = post_strength - pre_strength
 
-            before_avg = np.mean(before_window)
-            after_avg = np.mean(after_window)
+        if strength_change > 0.1:  # Significant positive change
+            return {
+                'detected': True,
+                'epoch': epochs[max_acceleration_idx],
+                'index': max_acceleration_idx,
+                'strength_change': strength_change,
+                'acceleration': second_derivatives[max_acceleration_idx]
+            }
 
-            # Grokking: sudden improvement from low to high accuracy
-            if (after_avg - before_avg > 0.15 and
-                    before_avg < 0.6 and
-                    after_avg > 0.7):
-                grokking_epochs.append(i)
+        return {'detected': False}
 
-        return grokking_epochs
+    def _analyze_pre_grokking(self, epochs: List[int], strengths: List[float],
+                              transition_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze circuit behavior before grokking"""
+        if not transition_info.get('detected'):
+            return {'phase': 'unknown'}
+
+        transition_idx = transition_info['index']
+        pre_strengths = strengths[:transition_idx]
+
+        if len(pre_strengths) < 3:
+            return {'phase': 'insufficient_data'}
+
+        return {
+            'phase': 'memorization',
+            'average_strength': np.mean(pre_strengths),
+            'strength_stability': np.std(pre_strengths),
+            'trend': np.polyfit(range(len(pre_strengths)), pre_strengths, 1)[0],
+            'duration': transition_idx
+        }
+
+    def _analyze_post_grokking(self, epochs: List[int], strengths: List[float],
+                               transition_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze circuit behavior after grokking"""
+        if not transition_info.get('detected'):
+            return {'phase': 'unknown'}
+
+        transition_idx = transition_info['index']
+        post_strengths = strengths[transition_idx:]
+
+        if len(post_strengths) < 3:
+            return {'phase': 'insufficient_data'}
+
+        return {
+            'phase': 'generalization',
+            'average_strength': np.mean(post_strengths),
+            'strength_stability': np.std(post_strengths),
+            'trend': np.polyfit(range(len(post_strengths)), post_strengths, 1)[0],
+            'duration': len(post_strengths)
+        }
 
     def _get_circuits_in_window(self, start_epoch: int, end_epoch: int) -> List[str]:
         """Get circuits that emerged in the specified epoch window"""
@@ -408,12 +540,12 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
 
         self.temporal_patterns = patterns
 
-        print("📈 Temporal patterns detected:")
+        self.logger.info("📈 Temporal patterns detected:")
         for pattern_type, pattern_data in patterns.items():
             if isinstance(pattern_data, dict) and 'count' in pattern_data:
-                print(f"   {pattern_type}: {pattern_data['count']} instances")
+                self.logger.info(f"   {pattern_type}: {pattern_data['count']} instances")
             elif isinstance(pattern_data, list):
-                print(f"   {pattern_type}: {len(pattern_data)} instances")
+                self.logger.info(f"   {pattern_type}: {len(pattern_data)} instances")
 
         return patterns
 
@@ -523,6 +655,67 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
             'lifetime_distribution': 'short' if np.mean(lifetimes) < 50 else 'long'
         }
 
+    def analyze_prerequisite_chains(self) -> Dict[str, List[str]]:
+        """🆕 NEW: Analyze prerequisite relationships between circuits"""
+        self.logger.info("Analyzing prerequisite chains")
+
+        chains = {}
+
+        for circuit_id in self.prerequisite_map:
+            chain = self._trace_prerequisite_chain(circuit_id, set())
+            if len(chain) > 1:
+                chains[circuit_id] = chain
+                self.logger.debug(f"  Chain: {circuit_id} ← {len(chain) - 1} prerequisites")
+
+        self.logger.info(f"🔗 Found {len(chains)} prerequisite chains")
+        return chains
+
+    def _trace_prerequisite_chain(self, circuit_id: str, visited: set) -> List[str]:
+        """🆕 NEW: Trace prerequisite chain with cycle detection"""
+        if circuit_id in visited:
+            return []  # Avoid cycles
+
+        visited.add(circuit_id)
+        chain = [circuit_id]
+
+        for prereq in self.prerequisite_map.get(circuit_id, set()):
+            prereq_chain = self._trace_prerequisite_chain(prereq, visited.copy())
+            chain.extend(prereq_chain)
+
+        return chain
+
+    def record_prerequisite_relationship(self, dependent_circuit: str, prerequisite_circuit: str,
+                                         strength: float = 1.0):
+        """🆕 NEW: Record prerequisite relationship"""
+        self.prerequisite_map[dependent_circuit].add(prerequisite_circuit)
+        self.dependency_strengths[(prerequisite_circuit, dependent_circuit)] = strength
+
+        self.logger.debug(f"Recorded: {prerequisite_circuit} → {dependent_circuit} (strength: {strength:.3f})")
+
+    def get_dependency_statistics(self) -> Dict[str, Any]:
+        """🆕 NEW: Get quantitative dependency metrics"""
+        all_circuits = set(self.prerequisite_map.keys())
+        for prereqs in self.prerequisite_map.values():
+            all_circuits.update(prereqs)
+
+        stats = {
+            'total_circuits': len(all_circuits),
+            'circuits_with_prerequisites': len(self.prerequisite_map),
+            'average_prerequisites': np.mean(
+                [len(prereqs) for prereqs in self.prerequisite_map.values()]) if self.prerequisite_map else 0,
+            'max_prerequisites': max(
+                [len(prereqs) for prereqs in self.prerequisite_map.values()]) if self.prerequisite_map else 0,
+            'total_dependencies': sum(len(prereqs) for prereqs in self.prerequisite_map.values()),
+            'dependency_density': len(self.dependency_strengths) / (len(all_circuits) ** 2) if all_circuits else 0
+        }
+
+        self.logger.info("📊 Dependency Statistics:")
+        self.logger.info(f"   Total circuits: {stats['total_circuits']}")
+        self.logger.info(f"   With prerequisites: {stats['circuits_with_prerequisites']}")
+        self.logger.info(f"   Avg prerequisites: {stats['average_prerequisites']:.2f}")
+
+        return stats
+
     # ============================================================================
     # INTEGRATED REPORTING
     # ============================================================================
@@ -531,8 +724,8 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
         """
         Generate comprehensive report combining evolution tracking with emergence analysis
         """
-        print("\n📊 Generating Temporal Emergence Report")
-        print("=" * 50)
+        self.logger.info("\n📊 Generating Temporal Emergence Report")
+        self.logger.info("=" * 50)
 
         # Get base evolution analysis from parent class
         base_report = self.generate_comprehensive_report()
@@ -577,7 +770,7 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
             import json
             with open(report_path, 'w') as f:
                 json.dump(emergence_report, f, indent=2, default=str)
-            print(f"✅ Report saved to {report_path}")
+            self.logger.info(f"✅ Report saved to {report_path}")
 
         return emergence_report
 
@@ -598,6 +791,34 @@ class TemporalCircuitEmergenceAnalyzer(CircuitEvolutionAnalyzer):
         epoch_span = max(self.emergence_epochs.values()) - min(self.emergence_epochs.values())
 
         return total_circuits / max(epoch_span, 1)
+
+    def get_dependency_statistics(self) -> Dict[str, Any]:
+        """
+        🆕 MOVED: Get statistics about dependency relationships
+        Originally from CircuitEmergenceAnalyzer
+        """
+        all_circuits = set(self.prerequisite_map.keys())
+        for prereqs in self.prerequisite_map.values():
+            all_circuits.update(prereqs)
+
+        stats = {
+            'total_circuits': len(all_circuits),
+            'circuits_with_prerequisites': len(self.prerequisite_map),
+            'average_prerequisites': np.mean(
+                [len(prereqs) for prereqs in self.prerequisite_map.values()]) if self.prerequisite_map else 0,
+            'max_prerequisites': max(
+                [len(prereqs) for prereqs in self.prerequisite_map.values()]) if self.prerequisite_map else 0,
+            'total_dependencies': sum(len(prereqs) for prereqs in self.prerequisite_map.values()),
+            'dependency_density': len(self.dependency_strengths) / (len(all_circuits) ** 2) if all_circuits else 0
+        }
+
+        self.logger.info("📊 Dependency Statistics:")
+        self.logger.info(f"   Total circuits: {stats['total_circuits']}")
+        self.logger.info(f"   Circuits with prerequisites: {stats['circuits_with_prerequisites']}")
+        self.logger.info(f"   Average prerequisites: {stats['average_prerequisites']:.2f}")
+        self.logger.info(f"   Dependency density: {stats['dependency_density']:.3f}")
+
+        return stats
 
 
 # ============================================================================

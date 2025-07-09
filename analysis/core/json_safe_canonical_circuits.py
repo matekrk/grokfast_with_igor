@@ -7,17 +7,15 @@ particularly for induction circuits with position/distance data.
 """
 
 import json
-from idlelib.window import registry
 
 import numpy as np
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 
 import pandas as pd
 
 # Import existing JSON utilities
 from analysis.utils.utils import CircuitJSONEncoder, clean_for_json, is_json_serializable
-from analysis.helpers.missing_functions import _clean_for_json
 from analysis.core.canonical_circuit_system import (
     CanonicalCircuitRegistry, CanonicalRegistryAdapter,
     CircuitInstance, ComputationalSignature, CanonicalCircuit

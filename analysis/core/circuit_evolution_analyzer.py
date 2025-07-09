@@ -8,15 +8,17 @@ transformer learning dynamics, circuit formation, and knowledge organization.
 Uses your existing CircuitEvolutionTracker and EnhancedCircuitRegistry.
 """
 
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 from collections import defaultdict, Counter
 from pathlib import Path
 import json
 import numpy as np
 
+from analysis.core import CircuitMetadata, EmergencePhase
 # Import from the tracker and existing schema
 from analysis.core.circuit_schema import (LearningPhase, InteractionType, InteractionEvent,
-                                          LearningPhaseTransition, CircuitType)
+                                          LearningPhaseTransition, CircuitType, EvolutionSnapshot, EvolutionPattern)
+from analysis.core.unified_logger import UnifiedLogger
 
 
 class CircuitEvolutionAnalyzer:
@@ -778,17 +780,6 @@ class CircuitEvolutionAnalyzer:
 
         return {itype: dict(buckets) for itype, buckets in evolution.items()}
 
-
-    def save_research_report(self, report: Dict[str, Any]):
-        """Save research report to file"""
-        report_file = self.storage_dir / "circuit_evolution_research_report.json"
-        with open(report_file, 'w') as f:
-            json.dump(report, f, indent=2)
-
-        print(f"✅ Research report saved to {report_file}")
-        self._print_report_summary(report)
-
-
     def _print_report_summary(self, report: Dict[str, Any]):
         """Print human-readable report summary"""
         print("\n" + "=" * 60)
@@ -819,6 +810,484 @@ class CircuitEvolutionAnalyzer:
         for circuit_id, influence in dependencies['most_influential_circuits'][:3]:
             print(f"     {circuit_id[:20]:<20}: enables {influence} circuits")
 
+class CircuitEvolutionTracker:
+    """
+    Extends existing CircuitMetadata with comprehensive evolution tracking
+    Integrates seamlessly with existing circuit_schema.py structure
+    """
+
+    def __init__(self, circuit_metadata: CircuitMetadata, logger=None):
+        """Initialize with existing CircuitMetadata"""
+        self.metadata = circuit_metadata
+
+        # Evolution-specific extensions
+        self.evolution_snapshots: List[EvolutionSnapshot] = []
+        self.interaction_events: List[InteractionEvent] = []
+        self.evolution_pattern: Optional[EvolutionPattern] = None
+        self.learning_phases: Dict[int, LearningPhase] = {}  # epoch -> phase
+
+        # Analysis results
+        self.emergence_cascade_id: Optional[str] = None
+        self.dependency_chain_position: Optional[int] = None
+        self.evolution_milestones: Dict[str, int] = {}  # milestone -> epoch
+
+        self.logger = logger
+
+    def record_learning_phase(self, epoch: int, learning_phase: LearningPhase):
+        """Record learning phase for epoch"""
+        if not hasattr(self, 'learning_phases'):
+            self.learning_phases = {}
+        self.learning_phases[epoch] = learning_phase
+
+    def record_snapshot(self, epoch: int, attribution: float, detection_confidence: float,
+                        stability_score: float, behavioral_impact: float,
+                        learning_phase: LearningPhase, **context):
+        """Record circuit state at specific epoch"""
+        snapshot = EvolutionSnapshot(
+            epoch=epoch,
+            attribution=attribution,
+            detection_confidence=detection_confidence,
+            stability_score=stability_score,
+            behavioral_impact=behavioral_impact,
+            learning_phase=learning_phase,
+            context_metadata=context
+        )
+        self.evolution_snapshots.append(snapshot)
+
+        # Update existing metadata
+        self.metadata.last_seen = epoch
+        self.metadata.detection_epochs.append(epoch)
+        self.metadata.strength_history.append((epoch, attribution))
+
+        # Track learning phase
+        self.learning_phases[epoch] = learning_phase
+
+        # Update emergence phase in existing metadata if appropriate
+        if learning_phase in [LearningPhase.GENERALIZATION, LearningPhase.CONSOLIDATION]:
+            self.metadata.emergence_phase = EmergencePhase.MATURE
+        elif learning_phase in [LearningPhase.TRANSITION]:
+            self.metadata.emergence_phase = EmergencePhase.DEVELOPING
+
+    def analyze_evolution_pattern(self) -> EvolutionPattern:
+        """Analyze overall evolution pattern from snapshots"""
+        if len(self.evolution_snapshots) < 3:
+            return EvolutionPattern.GRADUAL_EMERGENCE
+
+        # Extract attribution trajectory
+        attributions = [s.attribution for s in self.evolution_snapshots]
+        epochs = [s.epoch for s in self.evolution_snapshots]
+
+        # Simple pattern detection
+        if self._is_sudden_emergence(attributions, epochs):
+            pattern = EvolutionPattern.SUDDEN_EMERGENCE
+        elif self._is_oscillating(attributions):
+            pattern = EvolutionPattern.OSCILLATING
+        elif self._is_plateauing(attributions):
+            pattern = EvolutionPattern.PLATEAUING
+        elif self._is_declining(attributions):
+            pattern = EvolutionPattern.DECLINING
+        else:
+            pattern = EvolutionPattern.GRADUAL_EMERGENCE
+
+        self.evolution_pattern = pattern
+        return pattern
+
+    def _is_sudden_emergence(self, attributions: List[float], epochs: List[int]) -> bool:
+        """Detect sudden emergence pattern"""
+        if len(attributions) < 3:
+            return False
+
+        # Look for rapid increase in short time window
+        for i in range(1, len(attributions)):
+            if attributions[i] > attributions[i - 1] * 2:  # Double in one step
+                return True
+        return False
+
+    def _is_oscillating(self, attributions: List[float]) -> bool:
+        """Detect oscillating pattern"""
+        if len(attributions) < 5:
+            return False
+
+        # Count direction changes
+        direction_changes = 0
+        for i in range(2, len(attributions)):
+            prev_trend = attributions[i - 1] - attributions[i - 2]
+            curr_trend = attributions[i] - attributions[i - 1]
+            if (prev_trend > 0) != (curr_trend > 0):  # Direction change
+                direction_changes += 1
+
+        return direction_changes > len(attributions) // 3
+
+    def _is_plateauing(self, attributions: List[float]) -> bool:
+        """Detect plateauing pattern"""
+        if len(attributions) < 4:
+            return False
+
+        # Check if recent values are stable
+        recent = attributions[-4:]
+        std = sum((x - sum(recent) / len(recent)) ** 2 for x in recent) ** 0.5
+        return std < 0.05  # Low variance in recent values
+
+    def _is_declining(self, attributions: List[float]) -> bool:
+        """Detect declining pattern"""
+        if len(attributions) < 3:
+            return False
+
+        # Check if trend is consistently downward
+        declining_steps = 0
+        for i in range(1, len(attributions)):
+            if attributions[i] < attributions[i - 1]:
+                declining_steps += 1
+
+        return declining_steps > len(attributions) * 0.6
+
+
+    def record_interaction(self, epoch: int, source_circuit: str, target_circuit: str,
+                           interaction_type: InteractionType, strength: float):
+        if not hasattr(self, 'interactions'):
+            self.interactions = []
+        self.interactions.append({
+            'epoch': epoch, 'source': source_circuit, 'target': target_circuit,
+            'type': interaction_type, 'strength': strength
+        })
+
+    def determine_learning_phase(self, epoch: int, accuracy: float) -> LearningPhase:
+        # Adapt this logic to your specific task
+        if epoch < 100:
+            return LearningPhase.EARLY_LEARNING
+        elif accuracy < 0.5:
+            return LearningPhase.MEMORIZATION
+        elif accuracy > 0.9:
+            return LearningPhase.GENERALIZATION
+        else:
+            return LearningPhase.TRANSITION
+
+    def get_circuit_id(self) -> str:
+        """Get circuit ID from metadata (would need to be passed or tracked)"""
+        # This would need to be set when initializing the tracker
+        return getattr(self, '_circuit_id', 'unknown')
+
+    def set_circuit_id(self, circuit_id: str):
+        """Set circuit ID for this tracker"""
+        self._circuit_id = circuit_id
+
+    def get_evolution_summary(self) -> Dict[str, Any]:
+        """Get comprehensive evolution summary"""
+        pattern = self.analyze_evolution_pattern() if self.evolution_pattern is None else self.evolution_pattern
+
+        return {
+            'evolution_pattern': pattern.value if pattern else 'unknown',
+            'total_snapshots': len(self.evolution_snapshots),
+            'total_interactions': len(self.interaction_events),
+            'learning_phases_observed': list(set(self.learning_phases.values())),
+            'strength_trajectory': [(s.epoch, s.attribution) for s in self.evolution_snapshots],
+            'key_interactions': [
+                {
+                    'epoch': event.epoch,
+                    'target': event.target_circuit,
+                    'type': event.interaction_type.value,
+                    'strength': event.strength
+                }
+                for event in self.interaction_events[-5:]  # Last 5 interactions
+            ],
+            'milestones': self.evolution_milestones,
+            'current_phase': self.learning_phases.get(
+                max(self.learning_phases.keys())) if self.learning_phases else None
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize evolution data"""
+        return {
+            'evolution_snapshots': [
+                {
+                    'epoch': s.epoch,
+                    'attribution': s.attribution,
+                    'detection_confidence': s.detection_confidence,
+                    'stability_score': s.stability_score,
+                    'behavioral_impact': s.behavioral_impact,
+                    'learning_phase': s.learning_phase.value,
+                    'active_interactions': s.active_interactions,
+                    'context_metadata': s.context_metadata
+                }
+                for s in self.evolution_snapshots
+            ],
+            'interaction_events': [
+                {
+                    'epoch': e.epoch,
+                    'source_circuit': e.source_circuit,
+                    'target_circuit': e.target_circuit,
+                    'interaction_type': e.interaction_type.value,
+                    'strength': e.strength,
+                    'confidence': e.confidence,
+                    'context': e.context
+                }
+                for e in self.interaction_events
+            ],
+            'evolution_pattern': self.evolution_pattern.value if self.evolution_pattern else None,
+            'learning_phases': {str(k): v.value for k, v in self.learning_phases.items()},
+            'emergence_cascade_id': self.emergence_cascade_id,
+            'dependency_chain_position': self.dependency_chain_position,
+            'evolution_milestones': self.evolution_milestones
+        }
+
+    @classmethod
+    def from_dict(cls, circuit_metadata: CircuitMetadata, data: Dict[str, Any]) -> 'CircuitEvolutionTracker':
+        """Deserialize evolution data"""
+        tracker = cls(circuit_metadata)
+
+        # Restore snapshots
+        for s_data in data.get('evolution_snapshots', []):
+            snapshot = EvolutionSnapshot(
+                epoch=s_data['epoch'],
+                attribution=s_data['attribution'],
+                detection_confidence=s_data['detection_confidence'],
+                stability_score=s_data['stability_score'],
+                behavioral_impact=s_data['behavioral_impact'],
+                learning_phase=LearningPhase(s_data['learning_phase']),
+                active_interactions=s_data.get('active_interactions', []),
+                context_metadata=s_data.get('context_metadata', {})
+            )
+            tracker.evolution_snapshots.append(snapshot)
+
+        # Restore interaction events
+        for e_data in data.get('interaction_events', []):
+            event = InteractionEvent(
+                epoch=e_data['epoch'],
+                source_circuit=e_data['source_circuit'],
+                target_circuit=e_data['target_circuit'],
+                interaction_type=InteractionType(e_data['interaction_type']),
+                strength=e_data['strength'],
+                confidence=e_data.get('confidence', 0.5),
+                context=e_data.get('context', {})
+            )
+            tracker.interaction_events.append(event)
+
+        # Restore other fields
+        if data.get('evolution_pattern'):
+            tracker.evolution_pattern = EvolutionPattern(data['evolution_pattern'])
+
+        tracker.learning_phases = {
+            int(k): LearningPhase(v) for k, v in data.get('learning_phases', {}).items()
+        }
+        tracker.emergence_cascade_id = data.get('emergence_cascade_id')
+        tracker.dependency_chain_position = data.get('dependency_chain_position')
+        tracker.evolution_milestones = data.get('evolution_milestones', {})
+
+        return tracker
+
+class MultiCircuitEvolutionManager:
+    """
+    Manages evolution tracking for multiple circuits
+    Each circuit gets its own CircuitEvolutionTracker
+    """
+
+    def __init__(self, registry, logger, save_dir: Path):
+        self.registry = registry
+        self.save_dir = save_dir
+        self.circuit_trackers: Dict[str, CircuitEvolutionTracker] = {}
+        self.logger = logger
+
+    def get_or_create_tracker(self, circuit_id: str) -> CircuitEvolutionTracker:
+        """Get existing tracker or create new one for circuit"""
+        if circuit_id not in self.circuit_trackers:
+            # Get circuit metadata from registry
+            circuit_metadata = self.registry.circuit_metadata[circuit_id]
+
+            # Create new tracker for this circuit
+            tracker = CircuitEvolutionTracker(circuit_metadata)
+            tracker.set_circuit_id(circuit_id)  # ✅ Set ID once
+
+            self.circuit_trackers[circuit_id] = tracker
+            self.logger.info(f"📊 Created new tracker for circuit: {circuit_id}")
+
+        return self.circuit_trackers[circuit_id]
+
+    def record_circuit_snapshot(self, circuit_id: str, epoch: int, **snapshot_data):
+        """Record snapshot for specific circuit"""
+        tracker = self.get_or_create_tracker(circuit_id)
+        tracker.record_snapshot(epoch=epoch, **snapshot_data)
+
+    def record_circuit_interaction(self, source_circuit_id: str, target_circuit_id: str,
+                                   epoch: int, interaction_type: InteractionType, strength: float):
+        """Record interaction between two circuits"""
+        # Record in source circuit's tracker
+        source_tracker = self.get_or_create_tracker(source_circuit_id)
+        source_tracker.record_interaction(epoch, source_circuit_id, target_circuit_id,
+                                          interaction_type, strength)
+
+        # Record in target circuit's tracker too (if relevant)
+        target_tracker = self.get_or_create_tracker(target_circuit_id)
+        target_tracker.record_interaction(epoch, source_circuit_id, target_circuit_id,
+                                          interaction_type, strength)
+
+class IntegratedCircuitEvolutionAnalyzer(CircuitEvolutionAnalyzer):
+    """
+    Enhanced CircuitEvolutionAnalyzer that works seamlessly with MultiCircuitEvolutionManager
+    """
+    def __init__(self, multi_circuit_manager: MultiCircuitEvolutionManager,
+                 enhanced_registry, logger, storage_dir: Path = None):
+        """
+        Initialize with MultiCircuitEvolutionManager integration
+        """
+        self.logger = logger
+
+        # Create aggregated tracker that provides the interface CircuitEvolutionAnalyzer expects
+        self.aggregated_tracker = AggregatedEvolutionTracker(
+            multi_circuit_manager=multi_circuit_manager,logger=logger
+        )
+
+        # Initialize parent class with aggregated data
+        super().__init__(
+            evolution_tracker=self.aggregated_tracker,
+            enhanced_registry=enhanced_registry,
+            storage_dir=storage_dir
+        )
+
+        self.multi_circuit_manager = multi_circuit_manager
+
+        self.logger.info("🚀 Integrated Circuit Evolution Analyzer initialized")
+        self.logger.info(f"   📊 Analyzing {len(self.emergence_epochs)} circuits")
+
+    def refresh_analysis(self):
+        """Refresh analysis with latest data from all circuit trackers"""
+        self.logger.info("🔄 Refreshing analysis with latest circuit data")
+
+        # Refresh aggregated data
+        self.aggregated_tracker.refresh_aggregation()
+
+        # Update our data references
+        self.emergence_epochs = self.aggregated_tracker.emergence_epochs
+        self.circuit_relationships = self.aggregated_tracker.circuit_relationships
+        self.evolution_snapshots = self.aggregated_tracker.evolution_snapshots
+        self.interaction_log = self.aggregated_tracker.interaction_events
+        self.learning_phases = self.aggregated_tracker.learning_phases
+
+        self.logger.info("✅ Analysis data refreshed")
+
+    def analyze_circuit_by_id(self, circuit_id: str) -> Dict[str, Any]:
+        """Analyze specific circuit using its individual tracker"""
+        if circuit_id not in self.multi_circuit_manager.circuit_trackers:
+            self.logger.warning(f"Circuit {circuit_id} not found in manager")
+            return {}
+
+        tracker = self.multi_circuit_manager.circuit_trackers[circuit_id]
+
+        # Individual circuit analysis
+        analysis = {
+            'circuit_id': circuit_id,
+            'emergence_epoch': self.emergence_epochs.get(circuit_id),
+            'total_snapshots': len(tracker.evolution_snapshots),
+            'evolution_pattern': tracker.analyze_evolution_pattern() if hasattr(tracker,
+                                                                                'analyze_evolution_pattern') else None,
+            'strength_trajectory': [(s.epoch, s.attribution) for s in tracker.evolution_snapshots],
+            'learning_phases_observed': list(set(tracker.learning_phases.values())),
+            'interactions_count': len(tracker.interaction_events),
+            'summary': tracker.get_evolution_summary() if hasattr(tracker, 'get_evolution_summary') else {}
+        }
+
+        self.logger.info(f"📊 Individual analysis complete for {circuit_id}")
+        return analysis
+
+    def analyze_all_circuits_individually(self) -> Dict[str, Dict[str, Any]]:
+        """Analyze each circuit individually using their own trackers"""
+        individual_analyses = {}
+
+        self.logger.info(
+            f"🔬 Running individual analysis for {len(self.multi_circuit_manager.circuit_trackers)} circuits")
+
+        for circuit_id in self.multi_circuit_manager.circuit_trackers:
+            individual_analyses[circuit_id] = self.analyze_circuit_by_id(circuit_id)
+
+        return individual_analyses
+
+    def generate_comprehensive_multi_circuit_report(self) -> Dict[str, Any]:
+        """Generate comprehensive report combining collective and individual analysis"""
+        self.logger.info("📋 Generating comprehensive multi-circuit report")
+
+        # Refresh data first
+        self.refresh_analysis()
+
+        # Get collective analysis (from parent class)
+        collective_analysis = self.generate_comprehensive_report()
+
+        # Get individual circuit analyses
+        individual_analyses = self.analyze_all_circuits_individually()
+
+        # Combine into comprehensive report
+        comprehensive_report = {
+            'collective_analysis': collective_analysis,
+            'individual_circuit_analyses': individual_analyses,
+            'multi_circuit_insights': {
+                'total_circuits_tracked': len(self.multi_circuit_manager.circuit_trackers),
+                'circuits_with_interactions': len(
+                    [cid for cid, tracker in self.multi_circuit_manager.circuit_trackers.items() if
+                     tracker.interaction_events]),
+                'avg_snapshots_per_circuit': np.mean([len(tracker.evolution_snapshots) for tracker in
+                                                      self.multi_circuit_manager.circuit_trackers.values()]),
+                'emergence_epoch_range': {
+                    'earliest': min(self.emergence_epochs.values()) if self.emergence_epochs else 0,
+                    'latest': max(self.emergence_epochs.values()) if self.emergence_epochs else 0
+                },
+                'most_active_circuits': self._find_most_active_circuits(),
+                'circuit_interaction_network': self._analyze_interaction_network()
+            }
+        }
+
+        # Save comprehensive report
+        if self.storage_dir:
+            report_path = self.storage_dir / "comprehensive_multi_circuit_report.json"
+            import json
+            with open(report_path, 'w') as f:
+                json.dump(comprehensive_report, f, indent=2, default=str)
+            self.logger.info(f"📄 Comprehensive report saved to {report_path}")
+
+        return comprehensive_report
+
+    def _find_most_active_circuits(self) -> List[Tuple[str, Dict[str, Any]]]:
+        """Find most active circuits based on snapshots and interactions"""
+        activity_scores = []
+
+        for circuit_id, tracker in self.multi_circuit_manager.circuit_trackers.items():
+            activity_score = {
+                'snapshots': len(tracker.evolution_snapshots),
+                'interactions': len(tracker.interaction_events),
+                'total_activity': len(tracker.evolution_snapshots) + len(tracker.interaction_events) * 2
+            }
+            activity_scores.append((circuit_id, activity_score))
+
+        # Sort by total activity
+        activity_scores.sort(key=lambda x: x[1]['total_activity'], reverse=True)
+
+        return activity_scores[:10]  # Top 10 most active
+
+    def _analyze_interaction_network(self) -> Dict[str, Any]:
+        """Analyze the network of circuit interactions"""
+        # Build interaction graph
+        interaction_graph = defaultdict(set)
+        interaction_strengths = defaultdict(float)
+
+        for event in self.interaction_log:
+            interaction_graph[event.source_circuit].add(event.target_circuit)
+            interaction_strengths[(event.source_circuit, event.target_circuit)] += event.strength
+
+        # Network statistics
+        all_circuits = set(interaction_graph.keys())
+        for targets in interaction_graph.values():
+            all_circuits.update(targets)
+
+        num_circuits = len(all_circuits)
+        num_interactions = len(self.interaction_log)
+
+        return {
+            'total_circuits_in_network': num_circuits,
+            'total_interactions': num_interactions,
+            'avg_interactions_per_circuit': num_interactions / num_circuits if num_circuits > 0 else 0,
+            'most_connected_circuits': sorted(
+                [(circuit, len(targets)) for circuit, targets in interaction_graph.items()],
+                key=lambda x: x[1], reverse=True
+            )[:5],
+            'network_density': num_interactions / (num_circuits * (num_circuits - 1)) if num_circuits > 1 else 0
+        }
 
 
 # ============================================================================
@@ -942,4 +1411,92 @@ def example_research_analysis_workflow():
 
 if __name__ == "__main__":
     example_research_analysis_workflow()
+
+
+class AggregatedEvolutionTracker:
+    """
+    Aggregates data from multiple CircuitEvolutionTracker instances
+    Provides the interface that CircuitEvolutionAnalyzer expects
+    """
+
+    def __init__(self, multi_circuit_manager: MultiCircuitEvolutionManager, logger: UnifiedLogger):
+        self.manager = multi_circuit_manager
+        self.logger = logger
+
+        # Build aggregated views
+        self._build_aggregated_data()
+
+    def _build_aggregated_data(self):
+        """Build aggregated data from all individual circuit trackers"""
+
+        # ✅ Aggregate emergence epochs (circuit_id -> first_epoch)
+        self.emergence_epochs: Dict[str, int] = {}
+
+        # ✅ Aggregate circuit relationships
+        self.circuit_relationships: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+        # ✅ Aggregate evolution snapshots by circuit
+        self.evolution_snapshots: Dict[str, List[Any]] = {}
+
+        # ✅ Aggregate interaction events
+        self.interaction_events: List[InteractionEvent] = []
+
+        # ✅ Aggregate learning phases
+        self.learning_phases: Dict[int, LearningPhase] = {}
+
+        self.logger.info(f"🔄 Aggregating data from {len(self.manager.circuit_trackers)} circuit trackers")
+
+        for circuit_id, tracker in self.manager.circuit_trackers.items():
+            self._aggregate_from_tracker(circuit_id, tracker)
+
+        self.logger.info(f"📊 Aggregation complete:")
+        self.logger.info(f"   Emergence epochs: {len(self.emergence_epochs)}")
+        self.logger.info(f"   Circuit relationships: {len(self.circuit_relationships)}")
+        self.logger.info(f"   Interaction events: {len(self.interaction_events)}")
+
+    def _aggregate_from_tracker(self, circuit_id: str, tracker: CircuitEvolutionTracker):
+        """Aggregate data from a single circuit tracker"""
+
+        # 1. Extract emergence epoch (first snapshot)
+        if tracker.evolution_snapshots:
+            first_epoch = min(snapshot.epoch for snapshot in tracker.evolution_snapshots)
+            self.emergence_epochs[circuit_id] = first_epoch
+
+        # 2. Extract evolution snapshots
+        self.evolution_snapshots[circuit_id] = [
+            {
+                'epoch': snapshot.epoch,
+                'attribution': snapshot.attribution,
+                'learning_phase': snapshot.learning_phase,
+                'detection_confidence': snapshot.detection_confidence,
+                'stability_score': snapshot.stability_score,
+                'behavioral_impact': snapshot.behavioral_impact,
+                'context': snapshot.context_metadata
+            }
+            for snapshot in tracker.evolution_snapshots
+        ]
+
+        # 3. Extract interaction events
+        for event in tracker.interaction_events:
+            self.interaction_events.append(event)
+
+            # Build circuit relationships map
+            relationship_key = (event.source_circuit, event.target_circuit)
+            if relationship_key not in self.circuit_relationships:
+                self.circuit_relationships[relationship_key] = {
+                    'type': event.interaction_type.value,
+                    'strength': event.strength,
+                    'epoch': event.epoch,
+                    'confidence': event.confidence
+                }
+
+        # 4. Extract learning phases
+        for epoch, phase in tracker.learning_phases.items():
+            if epoch not in self.learning_phases:
+                self.learning_phases[epoch] = phase
+
+    def refresh_aggregation(self):
+        """Refresh aggregated data (call after new data is added)"""
+        self._build_aggregated_data()
+
 

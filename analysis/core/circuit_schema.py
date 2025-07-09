@@ -28,6 +28,8 @@ class CircuitType(Enum):
     FUNCTIONAL = "functional"
     HYBRID = "hybrid"
     SUBSPACE = "subspace"
+    ATTENTION = "attention"
+    MLP = "mlp"
 
 
 class CircuitInteractionType(Enum):
@@ -50,12 +52,14 @@ class EmergencePattern(Enum):
 
 
 class ElementType(Enum):
+    MLP_NEURON = "mlp_neuron"   # fixme MLP != MLP_NEURON?
     TOKEN = "token"
     HEAD = "head"
     MLP = "mlp"
     SUBSPACE = "subspace"
     POSITION = "position"
     LAYER = "layer"
+    WEIGHT = "weight"
 
 
 class ConnectionType(Enum):

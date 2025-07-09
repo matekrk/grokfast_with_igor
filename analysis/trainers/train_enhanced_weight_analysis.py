@@ -7,7 +7,7 @@ from analysis.analyzers.attention_mlp_analyzer import AttentionMLPAnalyzer
 # Import the enhanced weight tracker and jump analysis tools
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
 from analysis.analyzers.grokking_detection import analyze_grokking_transitions
-from analysis.analyzers.jump_analysis_manager import JumpAnalysisManager
+from analysis.analyzers.jump_analysis_tools import JumpAnalysisManager
 from analysis.analyzers.jump_analysis_tools import JumpAnalysisTools
 from analysis.utils.utils import init_train_dataloader_state, FittingScore, debug_grokking_step
 

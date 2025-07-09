@@ -1,5 +1,5 @@
 # analysis/temporal/__init__.py
-from .circuit_emergence_analyzer import (
+from analysis.archived.circuit_emergence_analyzer import (
     CircuitEmergenceAnalyzer, DependencyTracker,
     create_temporal_analysis_system
 )

@@ -7,7 +7,7 @@ from analysis.analyzers import AdaptiveTokenOperationDetector
 from analysis.analyzers.attention_pattern_analyzer import AttentionAnalyzer
 from analysis.analyzers.continuous_circuit_tracker import ContinuousCircuitTracker
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
-from analysis.analyzers.integrated_token_discovery import IntegratedTokenCircuitDiscovery
+from analysis import IntegratedTokenCircuitDiscovery
 from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.core.circuit_schema import (save_circuits, load_circuits, ElementType, CircuitType)
 from analysis.trainers.utils import (

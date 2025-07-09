@@ -4,22 +4,20 @@ from collections import defaultdict
 # import torch
 import time
 from pathlib import Path
-from typing import Dict, List, Any  #, Optional
 
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
 from analysis.analyzers.continuous_circuit_tracker import ContinuousCircuitTracker
 
 from analysis.core import EnhancedCircuitRegistry, CircuitThresholds, ComputationalBudget
-from analysis.core.circuit_stability import CircuitStabilityAnalyzer, EnhancedRegistryLifecycleManager
+from analysis.core.circuit_stability import EnhancedRegistryLifecycleManager
 from analysis.core.unified_logger import UnifiedLogger  # ✅ ADD: UnifiedLogger import
-from analysis.core.circuit_evolution_manager import CircuitEvolutionManager, integrate_with_registry
-from analysis.core.unified_circuit_evolution_tracker import UnifiedCircuitEvolutionTracker
+from analysis.core.circuit_evolution_manager import integrate_with_registry
 
-from analysis.helpers.analysis_summary import create_final_analysis_summary
-from analysis.helpers.example_sampler import ExampleSampler, create_fixed_example_sampler  # , create_example_sampler, create_fixed_example_sampler
-from analysis.helpers.validation_helpers import save_enhanced_checkpoint
-from analysis.helpers.missing_functions import run_circuit_validation
-from analysis.helpers.circuit_analysis import analyze_circuit_emergence, analyze_circuit_relationships
+from analysis.utils.analysis_summary import create_final_analysis_summary
+from analysis.utils.example_sampler import create_fixed_example_sampler  # , create_example_sampler, create_fixed_example_sampler
+from analysis.utils.validation_helpers import save_enhanced_checkpoint
+from analysis.utils.missing_functions import run_circuit_validation
+from analysis.utils.circuit_analysis import analyze_circuit_emergence, analyze_circuit_relationships
 
 from analysis.utils.utils import init_train_dataloader_state
 
@@ -213,7 +211,7 @@ def train_with_enhanced_circuit_analysis(
         eval_stats = None
         current_accuracy = 0.0
 
-        # info evaluate if eval_stats obsolete; whatis check for grokking
+        # info evaluate if eval_stats is not anymore current; whatis check for grokking
         if should_evaluate and eval_loader:
             eval_stats = evaluate(model, eval_loader, criterion, device)
             current_accuracy = eval_stats['accuracy']

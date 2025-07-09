@@ -6,14 +6,13 @@ Uses intelligent example sampling to find robust canonical circuits across
 multiple diverse examples, enabling proper algorithm discovery.
 """
 
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 from collections import defaultdict
 import numpy as np
 
-from analysis.helpers.example_sampler import ExampleSampler
-from analysis.core.canonical_circuit_system import CanonicalCircuitRegistry, CanonicalRegistryAdapter
+from analysis.utils.example_sampler import ExampleSampler
+from analysis.core.canonical_circuit_system import CanonicalCircuitRegistry
 from analysis.sampling.fast_subset_sampler import FastCircuitSampler
-from analysis.core.circuit_schema import CircuitMetadata
 
 
 # Create single canonical initialization function
@@ -35,7 +34,7 @@ def create_standard_canonical_system(model, save_dir, logger, eval_loader, thres
     adapter = JSONSafeCanonicalRegistryAdapter(enhanced_registry, canonical_registry)
 
     # Evolution tracker with unified interface
-    from analysis.core.circuit_evolution_tracker import CircuitEvolutionTracker
+    from analysis.core.circuit_evolution_analyzer import CircuitEvolutionTracker
     evolution_tracker = CircuitEvolutionTracker(circuit_metadata=
                                                 enhanced_registry.circuit_metadata)
 
@@ -914,7 +913,7 @@ def updated_training_loop_with_canonical_sampling(
     """
 
     from pathlib import Path
-    from analysis.helpers.example_sampler import create_fixed_example_sampler
+    from analysis.utils.example_sampler import create_fixed_example_sampler
 
     if save_dir is None:
         save_dir = Path("results/canonical_sampling_analysis")

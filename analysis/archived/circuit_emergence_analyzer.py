@@ -6,52 +6,19 @@ Implements circuit emergence analysis and dependency tracking for studying
 how circuits form, interact, and build upon each other during learning.
 """
 
-from typing import Dict, List, Set, Tuple, Optional, Any
-from dataclasses import dataclass, field
-from collections import defaultdict, deque
-import numpy as np
 import json
+from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Dict, List, Set, Tuple, Optional, Any
+
+import numpy as np
 
 # Import the enhanced schema from phase 1.2
 from analysis.core.circuit_schema import (
-    GrokkingPhase, CircuitInteractionType, EmergencePattern, CircuitLevel,
-    CircuitMetadata, InteractionEvent, TemporalMetrics, CircuitDependencies
+    CircuitInteractionType, EmergencePattern, InteractionEvent
 )
-
-
-@dataclass
-class EmergenceCascade:
-    """Represents a cascade of circuit emergence events"""
-    cascade_id: str
-    trigger_circuit: str
-    trigger_epoch: int
-    enabled_circuits: List[Tuple[str, int]] = field(default_factory=list)  # (circuit_id, epoch)
-    cascade_strength: float = 0.0
-    temporal_span: int = 0
-    cascade_type: str = "linear"  # linear, exponential, wave
-
-    def get_cascade_rate(self) -> float:
-        """Calculate rate of circuit emergence in cascade"""
-        if self.temporal_span == 0:
-            return 0.0
-        return len(self.enabled_circuits) / self.temporal_span
-
-
-@dataclass
-class DependencyChain:
-    """Represents a chain of circuit dependencies"""
-    chain_id: str
-    circuits: List[str] = field(default_factory=list)
-    formation_epochs: List[int] = field(default_factory=list)
-    chain_strength: float = 0.0
-    chain_type: str = "sequential"  # sequential, parallel, hierarchical
-
-    def get_formation_rate(self) -> float:
-        """Calculate rate of dependency chain formation"""
-        if len(self.formation_epochs) < 2:
-            return 0.0
-        return len(self.circuits) / (max(self.formation_epochs) - min(self.formation_epochs))
+from analysis.temporal.temporal_circuit_emergence_analyzer import EmergenceCascade, DependencyChain
 
 
 class CircuitEmergenceAnalyzer:

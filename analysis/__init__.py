@@ -21,7 +21,7 @@ from .core import (
 
 # Key analyzers (most commonly used)
 from .analyzers.adaptive_token_operations import AdaptiveTokenOperationDetector
-from .analyzers.integrated_token_discovery import IntegratedTokenCircuitDiscovery
+from .analyzers.token_circuit_discovery import IntegratedTokenCircuitDiscovery
 
 # Helper functions (organized by domain)
 from .helpers import (
@@ -49,8 +49,6 @@ __all__ = [
 
     # Main analyzers
     'AdaptiveTokenOperationDetector',
-    'IntegratedTokenCircuitDiscovery',
-
     # Helper functions
     'ContentAwareCircuitAnalyzer',
     'analyze_tokens_adaptively',

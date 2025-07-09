@@ -5,9 +5,8 @@ import torch
 from matplotlib import pyplot as plt
 
 from analysis.analyzers.continuous_circuit_tracker import ContinuousCircuitTracker
-from analysis.analyzers.enhanced_phase_analyzer import EnhancedPhaseAnalyzer
 from analysis.analyzers.enhanced_weight_space_tracker import EnhancedWeightSpaceTracker
-from analysis.analyzers.phase_transition_analyzer import PhaseTransitionAnalyzer
+from analysis.analyzers.phase_transition_analyzer import PhaseTransitionAnalyzer, EnhancedPhaseAnalyzer
 from analysis.trainers.utils import evaluate, log_metrics, train_epoch, detect_grokking, process_jumps
 from analysis.utils.utils import init_train_dataloader_state, debug_grokking_step
 from analysis.utils.memory_manager import MemoryManager

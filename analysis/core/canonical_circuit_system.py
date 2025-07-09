@@ -16,7 +16,7 @@ from typing import Dict, List, Set, Any, Optional, Tuple
 
 import numpy as np
 
-from analysis.core.circuit_schema import (Circuit, CircuitType, Element, Connection)
+from analysis.core.circuit_schema import (Circuit, CircuitType, Element, Connection, CircuitMetadata)
 
 
 # ============================================================================
@@ -368,7 +368,7 @@ class CanonicalCircuitRegistry:
             structural_pattern={'fallback': True}
         )
 
-    def _get_or_create_canonical_id(self, signature: ComputationalSignature) -> str:
+    def _get_or_create_canonical_id(self, signature: ComputationalSignature, set_signature_to_id=True) -> str:
         """Get existing canonical ID or create new one"""
         signature_hash = signature.get_hash()
 
@@ -380,7 +380,10 @@ class CanonicalCircuitRegistry:
         circuit_type = signature.circuit_type
         canonical_id = f"{operation}_{circuit_type}_{signature_hash}"
 
-        # Store mapping
+        # info store mapping of signature_to_id whatis it is saved even if the paper is not eventually registered
+        #  warning it is possible that some signature_to_id's may be saved even if
+        #   the circuit is not; this is not very dangerous since the keys are hashed
+        #   fixme even though, perhaps this key should not be saved
         self.signature_to_id[signature_hash] = canonical_id
 
         return canonical_id
@@ -411,8 +414,8 @@ class CanonicalCircuitRegistry:
 
             # Initialize with first instance
             instances=[instance],
-            token_examples=set([' '.join(instance.tokens)]) if instance.tokens else set(),
-            position_patterns=set([self._create_position_pattern(instance.positions)]),
+            token_examples={' '.join(instance.tokens)} if instance.tokens else set(),
+            position_patterns={self._create_position_pattern(instance.positions)},
 
             # Evolution metrics
             first_seen=instance.epoch,
@@ -718,34 +721,66 @@ class CanonicalRegistryAdapter:
     def register_circuit_detection(self, circuit: Circuit, epoch: int, tokens: List[str],
                                    detection_confidence: float = 0.5,
                                    detection_method: str = "unknown",
-                                   example_metadata: Optional[Dict] = None) -> Tuple[str, str]:
+                                   example_metadata: Optional[Dict] = None) -> tuple[str, str, bool] | tuple[
+        str, None, bool]:
         """
         Register circuit in both canonical and legacy systems
 
         Returns:
             Tuple of (canonical_id, legacy_id)
         """
-        # Register in canonical system
-        canonical_id = self.canonical_registry.register_circuit_detection(
-            circuit, epoch, tokens, detection_confidence, detection_method, example_metadata
+        # info first check if circuit shuld be registered, i.e., has a minimum confidence,
+        #  stability, etc, and only then register it in both canonical and enhanced registries;
+        #  warning now it first registers in canonical system, then saves it's metadata
+        #   in enhanced registry, and only then checks if it should be registered!
+        # whatis get the canonical_id, and then check if the circuit should be registered if so, then
+        #  register both in canonical and enhanced registries
+        canonical_id: str
+        should_register_circuit, canonical_id = (
+            self._check_if_circuit_should_be_registered(circuit=circuit, epoch=epoch, 
+                                                        detection_confidence=detection_confidence))
+
+        if should_register_circuit:
+            # Register in canonical system
+            canonical_id = self.canonical_registry.register_circuit_detection(
+                circuit, epoch, tokens, detection_confidence, detection_method, example_metadata
+            )
+
+            # Create or update legacy circuit for compatibility
+            legacy_circuit = self._create_legacy_circuit(canonical_id, circuit, epoch)
+
+            # Register in enhanced registry
+            self.enhanced_registry.register_circuit_enhanced(
+                circuit=legacy_circuit,
+                source="canonical_detection",
+                epoch=epoch,
+                detection_method=f"canonical_{detection_method}",
+                confidence=detection_confidence
+            )
+
+            # Store mapping
+            self.canonical_to_legacy[canonical_id] = legacy_circuit.id
+
+            return canonical_id, legacy_circuit.id, True
+        else:
+            return canonical_id, None, False
+
+    def _check_if_circuit_should_be_registered(self, circuit: Circuit, epoch: int, 
+                                               detection_confidence: float) -> tuple[Any, str]:
+        # info check if circuit should be registered, i.e., has a minimum confidence,
+        #  stability, etc, and only then register it in both canonical and enhanced registries
+        signature_tmp = self.canonical_registry._extract_computational_signature_safe(circuit)
+        canonical_id_tmp = self.canonical_registry._get_or_create_canonical_id(signature_tmp)
+        if canonical_id_tmp not in self.enhanced_registry.circuits:
+            metadata = CircuitMetadata(first_detected=epoch, detection_method="robust_copy",
+                                       detection_confidence=detection_confidence)
+        else:
+            metadata = self.enhanced_registry.circuit_metadata[canonical_id_tmp]
+        # warning 
+        should_register_circuit = self.enhanced_registry._should_register_circuit(
+            circuit, metadata=metadata, confidence=detection_confidence,
         )
-
-        # Create or update legacy circuit for compatibility
-        legacy_circuit = self._create_legacy_circuit(canonical_id, circuit, epoch)
-
-        # Register in enhanced registry
-        self.enhanced_registry.register_circuit_enhanced(
-            circuit=legacy_circuit,
-            source="canonical_detection",
-            epoch=epoch,
-            detection_method=f"canonical_{detection_method}",
-            confidence=detection_confidence
-        )
-
-        # Store mapping
-        self.canonical_to_legacy[canonical_id] = legacy_circuit.id
-
-        return canonical_id, legacy_circuit.id
+        return should_register_circuit, canonical_id_tmp
 
     def _create_legacy_circuit(self, canonical_id: str, original_circuit: Circuit, epoch: int) -> Circuit:
         """Create legacy circuit for compatibility"""

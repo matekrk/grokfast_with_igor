@@ -7,13 +7,10 @@ info Addresses the issue where diverse_random sampling becomes too repetitive,
  strategies to discover rare computational patterns.
 """
 
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Tuple
 import numpy as np
 import random
 from collections import defaultdict, Counter
-from pathlib import Path
-
-from analysis.helpers.example_sampler import ExampleSampler
 
 
 class AggressiveDiversitySampler:

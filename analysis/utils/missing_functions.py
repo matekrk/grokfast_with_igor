@@ -3,11 +3,8 @@
 Missing helper functions that are referenced in the training script
 """
 
-import torch
-import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
-import time
 
 
 def run_circuit_validation(registry, validator, epoch: int, current_accuracy: float) -> Dict[str, Any]:
@@ -16,7 +13,7 @@ def run_circuit_validation(registry, validator, epoch: int, current_accuracy: fl
     This function was referenced but missing
     """
     # This is just a wrapper for the comprehensive validation
-    from analysis.helpers.validation_helpers import run_comprehensive_validation
+    from analysis.utils.validation_helpers import run_comprehensive_validation
     return run_comprehensive_validation(registry, validator, epoch, current_accuracy)
 
 

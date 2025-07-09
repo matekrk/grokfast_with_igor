@@ -5,8 +5,9 @@ from pathlib import Path
 import numpy as np
 
 from analysis.canonical.sampled_circuit_analysis import create_standard_canonical_system
+from analysis.core.circuit_evolution_analyzer import MultiCircuitEvolutionManager, IntegratedCircuitEvolutionAnalyzer
 # from analysis.core.circuit_evolution_analyzer import create_evolution_analyzer_from_existing_tracker
-from analysis.helpers.example_sampler import create_aggressive_example_sampler, create_fast_circuit_example_sampler
+from analysis.utils.example_sampler import create_aggressive_example_sampler, create_fast_circuit_example_sampler
 from analysis.temporal.temporal_circuit_emergence_analyzer import create_temporal_emergence_analyzer
 from analysis.trainers.utils import detect_grokking, train_epoch, evaluate, get_default_circuit_config, \
     create_standard_thresholds, validate_canonical_system_health, initialize_circuit_dataframe, \
@@ -92,6 +93,8 @@ def perform_robust_circuit_detection(canonical_detector, eval_loader, epoch, tot
     registered_circuits = []
     registration_summary = {'attempted': 0, 'succeeded': 0, 'aggregated': 0}
 
+    enhanced_registry = canonical_detector.enhanced_registry
+
     # Register robust copy circuits
     for pattern_key, pattern_data in robust_patterns['robust_copy_patterns'].items():
         try:
@@ -115,21 +118,29 @@ def perform_robust_circuit_detection(canonical_detector, eval_loader, epoch, tot
             })
 
             # Register with canonical system
+            # info first check if circuit shuld be registered, i.e., has a minimum confidence,
+            #  stability, etc, and only then register it in both canonical and enhanced registries;
+            #  warning now it first registers in canonical system, then saves it's metadata
+            #   in enhanced registry, and only then checks if it should be registered!
+            detection_confidence = min(1.0,
+                                       pattern_data['avg_strength'] * pattern_data['consistency'])
             aggregated_up_to_now = canonical_detector.canonical_registry.total_aggregations
-            canonical_id, legacy_id = canonical_detector.canonical_adapter.register_circuit_detection(
+            canonical_id, legacy_id, registered = canonical_detector.canonical_adapter.register_circuit_detection(
                 circuit=circuit, epoch=epoch, tokens=representative['tokens'],
                 detection_confidence=min(1.0, pattern_data['avg_strength'] * pattern_data['consistency']),
                 detection_method="robust_copy",
                 example_metadata={'robust_pattern_data': pattern_data}
             )
-
-            registered_circuits.append(canonical_id)
-            registration_summary['aggregated'] += (canonical_detector.canonical_registry.total_aggregations
-                                                   - aggregated_up_to_now)
-            registration_summary['succeeded'] += 1
-
+            if registered:
+                registered_circuits.append(canonical_id)
+                registration_summary['aggregated'] += (canonical_detector.canonical_registry.total_aggregations
+                                                       - aggregated_up_to_now)
+                registration_summary['succeeded'] += 1
+            else:
+                logger.warning(f"Registration of {canonical_id} circuit failed for {pattern_key}")
+                # fixme compact the warnings todo build a dict with all unregistered circuits?
         except Exception as e:
-            logger.warning(f"Failed to register robust copy pattern {pattern_key}: {e}")
+            logger.warning(f"Failed to register robust copy pattern {pattern_key}: {e}")  # warning still some happen
 
     # Register robust induction circuits
     for pattern_key, pattern_data in robust_patterns['robust_induction_patterns'].items():
@@ -149,22 +160,31 @@ def perform_robust_circuit_detection(canonical_detector, eval_loader, epoch, tot
                 'detection_method': 'robust_cross_example_induction'
             })
 
+            # Register with canonical system
+            # info first check if circuit shuld be registered, i.e., has a minimum confidence,
+            #  stability, etc, and only then register it in both canonical and enhanced registries;
+            #  warning now it first registers in canonical system, then saves it's metadata
+            #   in enhanced registry, and only then checks if it should be registered!
+            detection_confidence = min(1.0,
+                                       pattern_data['avg_strength'] * pattern_data['consistency'])
             aggregated_up_to_now = canonical_detector.canonical_registry.total_aggregations
-            canonical_id, legacy_id = canonical_detector.canonical_adapter.register_circuit_detection(
+            canonical_id, legacy_id, registered = canonical_detector.canonical_adapter.register_circuit_detection(
                 circuit=circuit, epoch=epoch, tokens=representative['tokens'],
                 detection_confidence=min(1.0, pattern_data['avg_strength'] * pattern_data['consistency']),
                 detection_method="robust_induction",
                 example_metadata={'robust_pattern_data': pattern_data}
             )
-
-            registered_circuits.append(canonical_id)
-            registration_summary['aggregated'] += (canonical_detector.canonical_registry.total_aggregations
-                                                   - aggregated_up_to_now)
-            registration_summary['succeeded'] += 1
-
+            if registered:
+                registered_circuits.append(canonical_id)
+                registration_summary['aggregated'] += (canonical_detector.canonical_registry.total_aggregations
+                                                       - aggregated_up_to_now)
+                registration_summary['succeeded'] += 1
+            else:
+                logger.warning(f"Failed registration of {canonical_id} ({pattern_key})")
+                # logger.info(f"Failed registration of {canonical_id} ({pattern_key})")
         except Exception as e:
-            logger.warning(f"Failed to register robust induction pattern {pattern_key}: {e}")
-
+            logger.warning(f"Failed to register robust induction pattern {pattern_key}: {e}")   # warning still some happen
+            # fixme compact warnings
     return {
         'sampling_summary': {
             'strategy': 'diverse_random',
@@ -289,6 +309,8 @@ def train_with_enhanced_circuit_management(
 ):
 
     # info setup
+    # global robust_detection_results
+    global robust_detection_results
     if checkpointManager:
         save_dir = Path(checkpointManager.experiment_dir)
     else:
@@ -357,7 +379,6 @@ def train_with_enhanced_circuit_management(
     example_sampler = create_fast_circuit_example_sampler(eval_loader=eval_loader,
                                                           strategy_config=sampling_config)
 
-    from analysis.temporal import create_temporal_analysis_system
     circuit_evolution_tracker = circuit_system["evolution_tracker"]
     # fixme change for new analyzer integrated with CircuitEmergenceAnalyzer
 
@@ -366,7 +387,15 @@ def train_with_enhanced_circuit_management(
         enhanced_registry=circuit_system["enhanced_registry"],
         storage_dir=save_dir / "temporal_analysis"
     )
-
+    multi_circuit_evolution_manager = MultiCircuitEvolutionManager(registry=circuit_system['enhanced_registry'],
+                                                             logger=logger,
+                                                             save_dir = save_dir / "temporal_analysis")
+    integrated_circuit_evolution_analyzer = IntegratedCircuitEvolutionAnalyzer(
+        multi_circuit_manager=multi_circuit_evolution_manager,
+        enhanced_registry=circuit_system["enhanced_registry"],
+        logger=logger,
+        storage_dir=save_dir / "temporal_analysis"
+    )
     # fixme no references as yet
     # temporal_analysis_system = create_temporal_analysis_system(save_dir / "temporal_evolution")
 
@@ -468,36 +497,69 @@ def train_with_enhanced_circuit_management(
                 # info perform analysis of circuits found
                 #  fixme need to implement some analyze_<<type>>_circuits
                 #   warning see examples.temporal_emergence_analysis_example.py
+                # fixme evolution snapshot is per-circuit!
+                learning_phase = circuit_evolution_tracker.determine_learning_phase(epoch=epoch,
+                                                                                    accuracy=current_accuracy)
+                # info set get trackers for registered circuits
+                #  whatis only for the newly dicovered ones
+                all_circuits = canonical_detector.enhanced_registry.circuits
+                registered_circuits = robust_detection_results['registered_circuits']
+                for circuit_id in registered_circuits:
+                    if circuit_id not in all_circuits:
+                        continue
+                    circuit = all_circuits[circuit_id]
+                    multi_circuit_evolution_manager.record_circuit_snapshot(
+                        circuit_id=circuit_id,
+                        epoch=epoch,
+                        attribution=circuit.attribution,
+                        learning_phase=learning_phase,
+                        detection_confidence=circuit.metadata.get('detection_confidence', 0.5), # fixme now or average?
+                        stability_score=circuit.metadata.get('stability_score', 0.0),
+                        behavioral_impact=circuit.metadata.get('behavioral_impact', 0.0),
+                        active_interactions=[],     # fixme where to get it from?
+                    )
+
+                # evolution_snapshot = EvolutionSnapshot(
+                #     epoch=epoch,
+                #     attribution=None,
+                #     stability_score=None,
+                #     behavioral_impact=None,
+                #     learning_phase=circuit_evolution_tracker.determine_learning_phase(epoch=epoch,accuracy=current_accuracy),
+                #     context_metadata=None,
+                # )
+                # circuit_evolution_analyzer.evolution_tracker.record_snapshot(circuit_snapshot)
 
                 # info analyze circuits with the temporal circuit evolution analyzer
-                if epoch > 600:
-                    circuit_evolution_analyzer._analyze_circuit_lifetimes()
-                    circuit_evolution_analyzer.analyze_dependency_chains()
-                    circuit_evolution_analyzer._detect_grokking_epochs(training_metrics['eval_accuracy'])
-                    circuit_evolution_analyzer._find_dependency_chains()
+                if epoch >= 800 and epoch % 100 == 0:
+                    integrated_circuit_evolution_analyzer.refresh_analysis()
+                    integrated_analysis = integrated_circuit_evolution_analyzer.analyze_all_circuits_individually()
+                    emergence_order = integrated_circuit_evolution_analyzer.analyze_emergence_order()
+                    emergence_patterns = integrated_circuit_evolution_analyzer.analyze_emergence_patterns()
+                    interaction_patterns = integrated_circuit_evolution_analyzer.analyze_interaction_patterns()
+                    # circuit_dependencies = integrated_circuit_evolution_analyzer.analyze_circuit_dependencies()
+                    phase_transistions = integrated_circuit_evolution_analyzer.analyze_learning_phase_transitions()
+                    comprehensive_report = integrated_circuit_evolution_analyzer.generate_comprehensive_report()
+
+                    # circuit_evolution_analyzer._analyze_circuit_lifetimes()
+                    # circuit_evolution_analyzer.analyze_dependency_chains()
+                    # circuit_evolution_analyzer._detect_grokking_epochs(training_metrics['eval_accuracy'])
+                    # circuit_evolution_analyzer._find_dependency_chains()
 
                     # info do the complete evolution analysis
-                    depend_chain = circuit_evolution_analyzer.analyze_dependency_chains()
-                    grok_trans = circuit_evolution_analyzer.analyze_grokking_transitions(training_metrics['eval_accuracy'])
-                    emerg_casc = circuit_evolution_analyzer.detect_emergence_cascades()
-                    temp_patt = circuit_evolution_analyzer.detect_temporal_patterns()
+                    # depend_chain = circuit_evolution_analyzer.analyze_dependency_chains()
+                    # grok_trans = circuit_evolution_analyzer.analyze_grokking_transitions(training_metrics['eval_accuracy'])
+                    # emerg_casc = circuit_evolution_analyzer.detect_emergence_cascades()
+                    # temp_patt = circuit_evolution_analyzer.detect_temporal_patterns()
                     # temp_emerg_report = circuit_evolution_analyzer.generate_temporal_emergence_report()
-                    emerg_order = circuit_evolution_analyzer.track_emergence_order()
+                    # emerg_order = circuit_evolution_analyzer.track_emergence_order()
 
-                    circ_depend = circuit_evolution_analyzer.analyze_circuit_dependencies()
-                    depend_order = circuit_evolution_analyzer.track_emergence_order()
-                    emerg_patt = circuit_evolution_analyzer.analyze_emergence_patterns()
-                    interact_patt = circuit_evolution_analyzer.analyze_interaction_patterns()
-                    learn_phase_trans = circuit_evolution_analyzer.analyze_learning_phase_transitions()
+                    # circ_depend = circuit_evolution_analyzer.analyze_circuit_dependencies()
+                    # depend_order = circuit_evolution_analyzer.track_emergence_order()
+                    # emerg_patt = circuit_evolution_analyzer.analyze_emergence_patterns()
+                    # interact_patt = circuit_evolution_analyzer.analyze_interaction_patterns()
+                    # learn_phase_trans = circuit_evolution_analyzer.analyze_learning_phase_transitions()
                     # compreh_report = circuit_evolution_analyzer.generate_comprehensive_report()
                     # research_rep = circuit_evolution_analyzer.generate_research_report()
-
-
-
-
-
-
-
 
         # info periodic saves
         if epoch % 500 == 0 and epoch > 0:

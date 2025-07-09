@@ -3,7 +3,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from analysis.core.circuit_registry import EnhancedCircuitRegistry as CircuitRegistry
 from analysis.core.circuit_schema import Element, ElementType, Connection, ConnectionType, Circuit, CircuitType
 from analysis.utils.utils import shorten_layer_head, get_current_callable_info
 
@@ -1158,13 +1157,6 @@ class ContinuousCircuitTracker:
         enhanced_correlation = (0.5 * pearson_corr + 0.3 * spearman_corr + 0.2 * cosine_sim)
 
         return enhanced_correlation
-
-
-
-
-
-
-
 
     def _find_significant_interactions(self, eval_loader, batch_limit=5, interaction_threshold=0.3):
         """
